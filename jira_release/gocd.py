@@ -34,6 +34,7 @@ ENVIRONMENT = "jira-release"
 REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
 
 NO_AUTH = {"roles": [], "users": []}
+APPROVER_ROLE = "release-approvers"   # created by gocd/auth/setup_auth.py
 
 
 def space_pipeline(space: str) -> str:
@@ -58,11 +59,11 @@ def _exec(*args: str) -> dict:
         "command": "gocd/run.sh", "arguments": list(args), "run_if": ["passed"]}}
 
 
-def _stage(name: str, approval: str, jobs: list[dict]) -> dict:
+def _stage(name: str, approval: str, jobs: list[dict], roles: list[str] | None = None) -> dict:
     return {"name": name, "fetch_materials": True, "clean_working_directory": True,
             "never_cleanup_artifacts": False, "environment_variables": [],
             "approval": {"type": approval, "allow_only_on_success": True,
-                         "authorization": NO_AUTH},
+                         "authorization": {"roles": roles or [], "users": []}},
             "jobs": jobs}
 
 
@@ -136,7 +137,8 @@ def approval_config(spaces: list[str], release_label: str = "") -> dict:
                      + [_git_material()],
                      # manual first stage: runs only when someone clicks Approve
                      [_stage("approval", "manual",
-                             [_job("publish-confluence", fetches + [_exec("publish")])])],
+                             [_job("publish-confluence", fetches + [_exec("publish")])],
+                             roles=[APPROVER_ROLE] if os.environ.get("GOCD_USER") else None)],
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release")])
 

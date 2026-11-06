@@ -24,8 +24,10 @@ GOCD = os.environ.get("GOCD_URL", "http://localhost:8153/go").rstrip("/")
 AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get("GOCD_USER") else None
 REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_config_repo()
 ENV_NAME = "jira-release"
-SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY"}
-SKIP = {"WORKSPACE"}  # set per space pipeline
+SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY", "GOCD_PASSWORD"}
+SKIP = {"WORKSPACE",  # set per space pipeline
+        # login accounts: kept in .env only (gocd/auth/setup_auth.py manages them)
+        "GOCD_ADMIN_USER", "GOCD_ADMIN_PASSWORD", "GOCD_APPROVERS", "GOCD_USERS"}
 # RELEASE (e.g. release-26.14), if present in .env, is written to the jira-release environment.
 # It can also be edited directly in GoCD: Admin > Environments > jira-release.
 
@@ -46,7 +48,7 @@ def read_env(path: Path) -> dict[str, str]:
         if line and not line.startswith("#") and "=" in line:
             k, _, v = line.partition("=")
             v = v.split(" #", 1)[0].strip().strip('"').strip("'")
-            if v and k.strip() not in SKIP:
+            if v and k.strip() not in SKIP and not k.strip().startswith("GOCD_PASSWORD_"):
                 out[k.strip()] = v
     return out
 
@@ -56,6 +58,9 @@ def main() -> None:
     if not env_file.is_file():
         sys.exit(f"{env_file} not found - copy .env.example to .env and fill it in")
     values = read_env(env_file)
+    global AUTH  # once login is on (gocd/auth/setup_auth.py), use the service account
+    if values.get("GOCD_USER") and values.get("GOCD_PASSWORD"):
+        AUTH = (values["GOCD_USER"], values["GOCD_PASSWORD"])
     # the connect-jira job calls the GoCD API from inside the agent container
     values.setdefault("GOCD_URL", "http://host.docker.internal:8153/go")
     missing = [k for k in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_TOKEN") if k not in values]

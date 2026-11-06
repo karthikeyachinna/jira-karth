@@ -8,7 +8,13 @@ cd "$(dirname "$0")"
 COUNT="${1:-3}"
 GOCD="${GOCD_URL:-http://localhost:8153/go}"
 
-KEY=$(curl -fsS -H 'Accept: application/xml' "$GOCD/api/admin/config.xml" \
+ENV_FILE="$(cd .. && cd .. && pwd)/.env"
+AUTH=()
+if [ -f "$ENV_FILE" ]; then   # login on? use the service account from .env
+  U=$(grep -E '^GOCD_USER=' "$ENV_FILE" | cut -d= -f2-); P=$(grep -E '^GOCD_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
+  [ -n "$U" ] && [ -n "$P" ] && AUTH=(-u "$U:$P")
+fi
+KEY=$(curl -fsS "${AUTH[@]}" -H 'Accept: application/xml' "$GOCD/api/admin/config.xml" \
       | grep -o 'agentAutoRegisterKey="[^"]*"' | cut -d'"' -f2 || true)
 [ -n "$KEY" ] || echo "! could not read the auto-register key; enable agents in the GoCD UI"
 
