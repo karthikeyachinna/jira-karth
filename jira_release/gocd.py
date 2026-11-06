@@ -82,7 +82,7 @@ def _var(name: str, value: str) -> dict:
     return {"name": name, "value": value, "secure": False}
 
 
-def connect_config() -> dict:
+def connect_config(release: str) -> dict:
     job = _job(UPSTREAM_STAGE, [_exec("check"), _exec("sync")],
                tabs=[{"name": "spaces", "path": "spaces/workspaces.html"}],
                artifacts=[{"type": "build", "source": "output/workspaces.*",
@@ -90,9 +90,10 @@ def connect_config() -> dict:
     repo = _git_material()
     repo["attributes"]["filter"] = None          # code changes DO trigger jira-connect
     repo["attributes"]["shallow_clone"] = False
-    # run label = the RELEASE variable from the jira-release environment, e.g. "release-26.1-13"
+    # RELEASE lives on this pipeline (GoCD only resolves ${env:...} in run labels from
+    # pipeline-level variables); "Trigger with options" can override it for one run.
     return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])],
-                     label="${env:RELEASE}-${COUNT}")
+                     label="${env:RELEASE}-${COUNT}", env=[_var("RELEASE", release)])
 
 
 def space_config(space: dict) -> dict:
@@ -185,9 +186,22 @@ class GoCD:
                       json={"pipelines": {"add": add, "remove": remove}})
 
     # ---- main entry -------------------------------------------------------
+    def connect_release(self) -> str:
+        """RELEASE to keep on jira-connect: SET_RELEASE (setup.py, from .env) wins; otherwise the
+        value already saved on the pipeline, so a one-off "Trigger with options" value or the
+        current run's environment never overwrites it; first time, fall back to $RELEASE."""
+        if os.environ.get("SET_RELEASE"):
+            return os.environ["SET_RELEASE"].strip()
+        existing = self.call("GET", f"/admin/pipelines/{UPSTREAM}", 11)
+        if existing.status_code == 200:
+            for v in existing.json().get("environment_variables", []):
+                if v["name"] == "RELEASE" and v.get("value"):
+                    return v["value"]
+        return os.environ.get("RELEASE", "").strip() or "no-release"
+
     def sync(self, catalog: list[dict]) -> None:
         spaces = [c["workspace"] for c in catalog]
-        self.upsert(connect_config())
+        self.upsert(connect_config(self.connect_release()))
         for c in catalog:
             self.upsert(space_config(c))
         self.upsert(approval_config(spaces, catalog[0].get("target_release", "") if catalog else ""))     # rewire fan-in before deleting old spaces

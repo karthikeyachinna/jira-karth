@@ -25,8 +25,7 @@ AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get(
 REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_config_repo()
 ENV_NAME = "jira-release"
 SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY"}
-SKIP = {"WORKSPACE"}  # set per space pipeline
-# RELEASE (e.g. release-26.14) from .env goes to the environment: the release every pipeline builds
+SKIP = {"WORKSPACE", "RELEASE"}  # WORKSPACE: per space pipeline; RELEASE: on jira-connect
 
 
 def api(method: str, path: str, version: int, **kw) -> requests.Response:
@@ -94,8 +93,18 @@ def main() -> None:
     # 3. pipelines (all defined in jira_release/gocd.py)
     migrate_from_config_repo()
     root = Path(__file__).resolve().parent.parent
+    # RELEASE from .env (e.g. release-26.14) becomes the jira-connect pipeline variable
+    release = read_release(env_file)
     subprocess.run([str(root / "gocd" / "run.sh"), "sync"], check=True,
-                   env={**os.environ, "GOCD_URL": GOCD})
+                   env={**os.environ, "GOCD_URL": GOCD,
+                        **({"SET_RELEASE": release} if release else {})})
+
+
+def read_release(env_file: Path) -> str:
+    for raw in env_file.read_text().splitlines():
+        if raw.strip().startswith("RELEASE="):
+            return raw.split("=", 1)[1].split(" #", 1)[0].strip().strip('"').strip("'")
+    return ""
 
 
 def migrate_from_config_repo() -> None:
