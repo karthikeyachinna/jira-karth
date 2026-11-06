@@ -19,9 +19,17 @@ from .jira import JiraClient, pick_release
 
 
 def target_release() -> str:
-    """The release to build: the RELEASE variable (GoCD environment "jira-release", .env, or
-    "Trigger with options"). Empty = each space builds its next unreleased version."""
-    return os.environ.get("RELEASE", "").strip()
+    """The release to build: RELEASE on the GoCD environment "jira-release" (inside a GoCD job it
+    arrives as an environment variable). Outside GoCD, read the same value via the GoCD API.
+    Empty = each space builds its next unreleased version."""
+    value = os.environ.get("RELEASE", "").strip()
+    if value or os.environ.get("GO_PIPELINE_NAME"):
+        return value
+    try:
+        from .gocd import GoCD
+        return GoCD().environment_release()
+    except Exception:               # GoCD not reachable: local run without a release
+        return ""
 
 
 def cmd_check(settings: Settings) -> None:

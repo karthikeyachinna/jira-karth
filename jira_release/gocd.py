@@ -90,10 +90,12 @@ def connect_config(release: str) -> dict:
     repo = _git_material()
     repo["attributes"]["filter"] = None          # code changes DO trigger jira-connect
     repo["attributes"]["shallow_clone"] = False
-    # RELEASE lives on this pipeline (GoCD only resolves ${env:...} in run labels from
-    # pipeline-level variables); "Trigger with options" can override it for one run.
+    # RELEASE is set ONCE on the "jira-release" environment. GoCD only resolves ${env:...} in
+    # run labels from pipeline variables, so sync copies it here as RELEASE_LABEL (display only;
+    # deliberately not named RELEASE, which would override the environment value).
     return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])],
-                     label="${env:RELEASE}-${COUNT}", env=[_var("RELEASE", release)])
+                     label="${env:RELEASE_LABEL}-${COUNT}",
+                     env=[_var("RELEASE_LABEL", release or "no-release")])
 
 
 def space_config(space: dict) -> dict:
@@ -193,28 +195,24 @@ class GoCD:
                       json={"pipelines": {"add": add, "remove": remove}})
 
     # ---- main entry -------------------------------------------------------
-    def connect_release(self) -> str:
-        """RELEASE to keep on jira-connect: SET_RELEASE (setup.py, from .env) wins; otherwise the
-        value already saved on the pipeline, so a one-off "Trigger with options" value or the
-        current run's environment never overwrites it; first time, fall back to $RELEASE."""
-        if os.environ.get("SET_RELEASE"):
-            return os.environ["SET_RELEASE"].strip()
-        existing = self.call("GET", f"/admin/pipelines/{UPSTREAM}", 11)
-        if existing.status_code == 200:
-            for v in existing.json().get("environment_variables", []):
-                if v["name"] == "RELEASE" and v.get("value"):
-                    return v["value"]
-        return os.environ.get("RELEASE", "").strip() or "no-release"
+    def environment_release(self) -> str:
+        """RELEASE from the "jira-release" GoCD environment (the single place it is set)."""
+        env = self.call("GET", f"/admin/environments/{ENVIRONMENT}", 3)
+        if env.status_code == 200:
+            for v in env.json().get("environment_variables", []):
+                if v["name"] == "RELEASE" and not v.get("secure"):
+                    return (v.get("value") or "").strip()
+        return ""
 
     def sync(self, catalog: list[dict]) -> None:
         spaces = [c["workspace"] for c in catalog]
-        self.upsert(connect_config(self.connect_release()))
+        release = catalog[0].get("target_release", "") if catalog else ""
+        self.upsert(connect_config(release))
         for c in catalog:
             self.upsert(space_config(c))
         # approval waits only for spaces that build the release; a cancelled (skipped) space
         # must not feed it, or GoCD would fall back to that space's last passed (stale) run
         building = [c["workspace"] for c in catalog if c.get("current_release")]
-        release = catalog[0].get("target_release", "") if catalog else ""
         self.upsert(approval_config(building, release))   # rewire fan-in before deleting old spaces
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
 
