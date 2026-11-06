@@ -1,110 +1,143 @@
 #!/usr/bin/env python3
-"""Wire this repo into GoCD - run once, re-run any time .env changes (idempotent).
+"""Configure a GoCD server from gocd/gocd.yaml (+ secrets in .env). Idempotent.
 
-1. Creates/updates the GoCD environment `jira-release` holding the settings from .env.
-   JIRA_TOKEN / OPENAI_API_KEY are stored as *secure* (encrypted) variables, so no
-   secret is ever committed to the public repo.
-2. Adds every registered agent to that environment.
-3. Creates all pipelines (jira-connect, one jira-space-<KEY> per Jira space,
-   jira-approvals) from jira_release/gocd.py via `gocd/run.sh sync`.
-   Removes the old YAML config repo if it is still registered.
+    gocd/bootstrap.sh                               # recommended: venv + this script
+    .venv/bin/python gocd/setup.py                  # same, venv already set up
+    GOCD_CONFIG=gocd/prod.yaml gocd/bootstrap.sh    # another GoCD domain
 
-Usage:  python3 gocd/setup.py            (GOCD_URL defaults to http://localhost:8153/go)
+Steps:
+  1. login       - if auth.enabled: apply auth.access_file (users, roles, approvers) via
+                   gocd/auth/setup_auth.py
+  2. environment - create/update gocd.environment with the job settings from gocd.yaml and
+                   the secrets from .env (JIRA_TOKEN, OPENAI_API_KEY, GOCD_PASSWORD: secure)
+  3. agents      - if agents.docker: start agents.count local Docker agents; enable every agent
+                   and add it to the environment
+  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes, jira-approvals
+                   (jira_release/gocd.py, via `gocd/run.sh sync`)
 """
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import requests
 
-GOCD = os.environ.get("GOCD_URL", "http://localhost:8153/go").rstrip("/")
-AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get("GOCD_USER") else None
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from jira_release import deploy  # noqa: E402
+
 REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_config_repo()
-ENV_NAME = "jira-release"
-SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY", "GOCD_PASSWORD"}
-SKIP = {"WORKSPACE",  # set per space pipeline
-        # user passwords (GOCD_PASSWORD_<LOGIN>) stay in .env; gocd/access.yaml + setup_auth.py
-        }
-# RELEASE (e.g. release-26.14), if present in .env, is written to the jira-release environment.
-# It can also be edited directly in GoCD: Admin > Environments > jira-release.
+SECRETS = {"JIRA_TOKEN", "OPENAI_API_KEY"}
+GOCD = deploy.gocd_url() if not os.environ.get("GOCD_URL") else os.environ["GOCD_URL"].rstrip("/")
+AUTH = None
 
 
-def api(method: str, path: str, version: int, **kw) -> requests.Response:
+def api(method: str, path: str, version: int, ok=(404,), **kw) -> requests.Response:
     headers = {"Accept": f"application/vnd.go.cd.v{version}+json",
                "Content-Type": "application/json", **kw.pop("headers", {})}
     r = requests.request(method, f"{GOCD}/api{path}", headers=headers, auth=AUTH, timeout=30, **kw)
-    if r.status_code >= 400 and r.status_code != 404:
+    if r.status_code >= 400 and r.status_code not in ok:
         sys.exit(f"GoCD {method} {path} -> {r.status_code}: {r.text[:400]}")
     return r
 
 
-def read_env(path: Path) -> dict[str, str]:
+def read_dotenv() -> dict[str, str]:
+    path = ROOT / ".env"
     out = {}
-    for raw in path.read_text().splitlines():
-        line = raw.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            v = v.split(" #", 1)[0].strip().strip('"').strip("'")
-            if v and k.strip() not in SKIP and not k.strip().startswith("GOCD_PASSWORD_"):
-                out[k.strip()] = v
+    if path.is_file():
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                out[k.strip()] = v.split(" #", 1)[0].strip().strip('"').strip("'")
     return out
 
 
-def main() -> None:
-    env_file = Path(__file__).resolve().parent.parent / ".env"
-    if not env_file.is_file():
-        sys.exit(f"{env_file} not found - copy .env.example to .env and fill it in")
-    values = read_env(env_file)
-    global AUTH  # once login is on (gocd/auth/setup_auth.py), use the service account
-    if values.get("GOCD_USER") and values.get("GOCD_PASSWORD"):
-        AUTH = (values["GOCD_USER"], values["GOCD_PASSWORD"])
-    # the connect-jira job calls the GoCD API from inside the agent container
-    values.setdefault("GOCD_URL", "http://host.docker.internal:8153/go")
-    missing = [k for k in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_TOKEN") if k not in values]
-    if missing:
-        sys.exit(f".env is missing: {', '.join(missing)}")
+def step(n: int, text: str) -> None:
+    print(f"\n[{n}/4] {text}")
 
-    # 1. environment with variables (secure ones encrypted by GoCD)
-    variables = [{"name": k, "value": v, "secure": k in SECURE} for k, v in sorted(values.items())]
-    env_path = f"/admin/environments/{ENV_NAME}"
+
+def main() -> None:
+    global AUTH
+    if not deploy.cfg():
+        sys.exit(f"{deploy.config_path()} not found")
+    env_name = deploy.environment()
+    print(f"GoCD {GOCD}  (config: {deploy.config_path().relative_to(ROOT)})")
+    dotenv = read_dotenv()
+    missing = [k for k in ("JIRA_TOKEN",) if not dotenv.get(k)]
+    if missing:
+        sys.exit(f".env is missing secrets: {', '.join(missing)}")
+    moved = sorted(k for k in deploy.job_env() if k in dotenv and k != "GOCD_URL")
+    if moved:
+        print(f"  note: {', '.join(moved)} in .env are ignored - gocd.yaml is used for them")
+
+    # 1. login -------------------------------------------------------------------------
+    step(1, "login")
+    if deploy.get("auth.enabled", False):
+        subprocess.run([sys.executable, "-u", str(ROOT / "gocd" / "auth" / "setup_auth.py")],
+                       check=True, env={**os.environ, "GOCD_URL": GOCD})
+        dotenv = read_dotenv()                    # setup_auth may have generated passwords
+    else:
+        print("  auth.enabled is false - GoCD stays open (no login)")
+    if dotenv.get("GOCD_USER") and dotenv.get("GOCD_PASSWORD"):
+        AUTH = (dotenv["GOCD_USER"], dotenv["GOCD_PASSWORD"])
+
+    # 2. environment -------------------------------------------------------------------
+    step(2, f"environment {env_name}")
+    values = {**deploy.job_env(), **{k: dotenv[k] for k in SECRETS if dotenv.get(k)}}
+    if AUTH:
+        values.update({"GOCD_USER": AUTH[0], "GOCD_PASSWORD": AUTH[1]})
+    variables = [{"name": k, "value": v, "secure": k in SECRETS or k == "GOCD_PASSWORD"}
+                 for k, v in sorted(values.items())]
+    env_path = f"/admin/environments/{env_name}"
     current = api("GET", env_path, 3)
     if current.status_code == 404:
         api("POST", "/admin/environments", 3, json={
-            "name": ENV_NAME, "pipelines": [], "environment_variables": variables})
-        print(f"created {env_path}")
-    else:
-        # PATCH only the variables (keeps the pipelines list): drop ours, add fresh values.
-        names = {v["name"] for v in variables}
+            "name": env_name, "pipelines": [], "environment_variables": variables})
+        print(f"  created {env_name}")
+    else:   # PATCH only our variables (keeps pipelines and any extra variables)
         stale = [v["name"] for v in current.json().get("environment_variables", [])
-                 if v["name"] in names]
+                 if v["name"] in values]
         if stale:
             api("PATCH", env_path, 3, json={"environment_variables": {"add": [], "remove": stale}})
         api("PATCH", env_path, 3, json={"environment_variables": {"add": variables, "remove": []}})
-        print(f"updated {env_path}")
-    print("  variables: " + ", ".join(f"{v['name']}{' (secure)' if v['secure'] else ''}"
-                                      for v in variables))
+        print(f"  updated {env_name}")
+    print("  " + ", ".join(f"{v['name']}{' (secure)' if v['secure'] else '=' + v['value']}"
+                           for v in variables))
 
-    # 2. agents -> environment
+    # 3. agents ------------------------------------------------------------------------
+    step(3, "agents")
+    if deploy.get("agents.docker", False):
+        count = str(deploy.get("agents.count", 3))
+        subprocess.run([str(ROOT / "gocd" / "agent" / "start.sh"), count], check=True, env={
+            **os.environ, "GOCD_URL": GOCD, "AGENT_SERVER_URL": deploy.get("gocd.agent_url", GOCD),
+            "AGENT_ENVIRONMENT": env_name})
+        for _ in range(30):                        # wait for them to register
+            if len(api("GET", "/agents", 7).json()["_embedded"]["agents"]) >= int(count):
+                break
+            time.sleep(3)
     agents = api("GET", "/agents", 7).json()["_embedded"]["agents"]
-    if agents:
-        api("PATCH", "/agents", 7, json={"uuids": [a["uuid"] for a in agents],
+    live = [a for a in agents if a.get("agent_state") != "LostContact"]
+    if live:
+        api("PATCH", "/agents", 7, json={"uuids": [a["uuid"] for a in live],
                                          "agent_config_state": "Enabled",
-                                         "operations": {"environments": {"add": [ENV_NAME]}}})
-        print(f"added {len(agents)} agent(s) to {ENV_NAME}")
+                                         "operations": {"environments": {"add": [env_name]}}})
+        print(f"  {len(live)} agent(s) enabled in {env_name}")
     else:
-        print("! no GoCD agents registered - run gocd/agent/start.sh, then re-run this script")
+        print("  ! no agents - set agents.docker: true, or register agents on this server")
 
-    # 3. pipelines (all defined in jira_release/gocd.py)
-    migrate_from_config_repo()
-    root = Path(__file__).resolve().parent.parent
-    subprocess.run([str(root / "gocd" / "run.sh"), "sync"], check=True,
+    # 4. pipelines ---------------------------------------------------------------------
+    step(4, "pipelines")
+    migrate_from_config_repo(env_name)
+    subprocess.run([str(ROOT / "gocd" / "run.sh"), "sync"], check=True,
                    env={**os.environ, "GOCD_URL": GOCD})
+    print(f"\nDone. Open {GOCD}/pipelines and run jira-connect.")
 
 
-def migrate_from_config_repo() -> None:
+def migrate_from_config_repo(env_name: str) -> None:
     """Earlier versions defined jira-connect in a YAML config repo. GoCD forbids API pipelines
     depending on config-repo pipelines, so drop the generated pipelines, then the config repo;
     `sync` recreates everything through the API (run history is kept by pipeline name)."""
@@ -112,20 +145,19 @@ def migrate_from_config_repo() -> None:
         return
     groups = api("GET", "/admin/pipeline_groups", 1).json()["_embedded"]["groups"]
     generated = [p["name"] for g in groups for p in g.get("pipelines", [])
-                 if p["name"] in ("jira-release-approval", "jira-approvals")
+                 if p["name"] in ("jira-release-approval", "jira-approvals", "jira-release-notes")
                  or p["name"].startswith("jira-space-")]
-    generated.sort(key=lambda n: n.startswith("jira-space-"))   # downstream (approval) first
-    env = api("GET", f"/admin/environments/{ENV_NAME}", 3)
+    generated.sort(key=lambda n: n.startswith("jira-space-"))   # downstream first
+    env = api("GET", f"/admin/environments/{env_name}", 3)
     if env.status_code == 200:
-        in_env = {p["name"] for p in env.json().get("pipelines", [])}
-        drop = [n for n in generated if n in in_env]
+        drop = [n for n in generated if n in {p["name"] for p in env.json().get("pipelines", [])}]
         if drop:
-            api("PATCH", f"/admin/environments/{ENV_NAME}", 3,
+            api("PATCH", f"/admin/environments/{env_name}", 3,
                 json={"pipelines": {"add": [], "remove": drop}})
     for name in generated:
         api("DELETE", f"/admin/pipelines/{name}", 11)
     api("DELETE", f"/admin/config_repos/{REPO_ID}", 4)
-    print(f"migrated: removed config repo {REPO_ID} and {len(generated)} generated pipeline(s)")
+    print(f"  migrated: removed config repo {REPO_ID} and {len(generated)} generated pipeline(s)")
 
 
 if __name__ == "__main__":

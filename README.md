@@ -21,16 +21,35 @@ GoCD groups: **jira** → `jira-connect` · **jira-spaces** → `jira-space-*` �
 
 All pipelines are defined in Python (`jira_release/gocd.py`) and created through the GoCD API.
 
-## Setup (once)
+## Setup on a GoCD server (`gocd/gocd.yaml`)
+
+`gocd/gocd.yaml` holds everything that differs between GoCD servers: server URL, agent URL,
+environment and group names, agents, repo, Jira site and spaces, release, region, AI model,
+Confluence, and login. `.env` holds **secrets only**.
 
 ```bash
-# .env: JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, JIRA_WORKSPACES, OPENAI_API_KEY, CONFLUENCE_*
-gocd/agent/start.sh 3          # 3 GoCD agents in Docker (python3 + Chrome) so spaces run in parallel
-python3 gocd/setup.py          # secrets → GoCD (encrypted), agents → env, create all pipelines
+# .env (git-ignored)
+JIRA_TOKEN=...
+OPENAI_API_KEY=...
+# GOCD_USER / GOCD_PASSWORD / GOCD_PASSWORD_<LOGIN> are generated on the first run
+
+gocd/bootstrap.sh                               # configure the server in gocd/gocd.yaml
+GOCD_CONFIG=gocd/prod.yaml gocd/bootstrap.sh    # another GoCD domain, from its own YAML
 ```
 
-Re-run `python3 gocd/setup.py` after changing `.env`. `.env` and `*.pdf` are git-ignored because
-this repo is public.
+`bootstrap.sh` sets up Python and is safe to re-run. It:
+
+1. turns login on (`gocd/access.yaml`)
+2. sets the environment variables (secrets are stored encrypted)
+3. starts the agents and adds them to the environment
+4. creates every pipeline
+
+For a GoCD server on another machine:
+
+- set `gocd.url` and `gocd.agent_url` to its address
+- set `agents.docker: false` if it already has agents
+- set `gocd.server_container: none`, then copy the generated `output/passwords.properties` to
+  the server
 
 ## Run
 

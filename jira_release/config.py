@@ -44,6 +44,11 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
+        # precedence: real environment (GoCD job) > gocd/gocd.yaml > .env (secrets)
+        from . import deploy
+        for key, value in deploy.job_env().items():
+            if key != "GOCD_URL":           # locally the API URL is gocd.url (deploy.gocd_url)
+                os.environ.setdefault(key, value)
         _load_dotenv(ROOT / ".env")
         return cls(
             jira_base_url=os.environ.get("JIRA_BASE_URL", "").rstrip("/"),

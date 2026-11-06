@@ -32,14 +32,16 @@ import requests
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from jira_release import deploy  # noqa: E402  (settings from gocd/gocd.yaml)
 ENV_FILE = ROOT / ".env"
-ACCESS_FILE = ROOT / "gocd" / "access.yaml"
-GOCD = os.environ.get("GOCD_URL", "http://localhost:8153/go").rstrip("/")
+ACCESS_FILE = ROOT / deploy.get("auth.access_file", "gocd/access.yaml")
+GOCD = deploy.gocd_url()
 CONTAINER_PATH = "/godata/config/passwords.properties"
 AUTH_ID = "file-auth"
 PLUGIN = "cd.go.authentication.passwordfile"
-ENVIRONMENT = "jira-release"
-APPROVAL_GROUP = "jira-approval"
+ENVIRONMENT = deploy.environment()
+APPROVAL_GROUP = deploy.group("approval")
 DRY = "--dry-run" in sys.argv
 
 
@@ -90,11 +92,14 @@ def api(method: str, path: str, version: int, auth=None, ok=(200, 201, 204, 404)
 
 
 def server_container() -> str:
-    if os.environ.get("GOCD_SERVER_CONTAINER"):
-        return os.environ["GOCD_SERVER_CONTAINER"]
-    names = subprocess.run(
-        ["docker", "ps", "--filter", "ancestor=gocd/gocd-server:v26.1.0", "--format",
-         "{{.Names}}"], capture_output=True, text=True, check=True).stdout.split()
+    """gocd.server_container: a name, "" (auto-detect a local gocd-server container) or
+    "none" (remote server: the password file is written to output/ for you to install)."""
+    configured = os.environ.get("GOCD_SERVER_CONTAINER") or deploy.get("gocd.server_container", "")
+    if configured:
+        return configured
+    names = [line.split()[0] for line in subprocess.run(
+        ["docker", "ps", "--format", "{{.Names}} {{.Image}}"], capture_output=True, text=True,
+        check=True).stdout.splitlines() if "gocd/gocd-server" in line]
     if not names:
         sys.exit("GoCD server container not found (set GOCD_SERVER_CONTAINER)")
     return names[0]
@@ -172,9 +177,16 @@ def main() -> None:
             fh.write("# managed by gocd/auth/setup_auth.py from gocd/access.yaml\n")
             fh.write("\n".join(lines) + "\n")
         os.chmod(fh.name, 0o644)
-        subprocess.run(["docker", "cp", fh.name, f"{server_container()}:{CONTAINER_PATH}"],
-                       check=True)
-        os.unlink(fh.name)
+        container = server_container()
+        if container == "none":
+            local = ROOT / "output" / "passwords.properties"
+            local.parent.mkdir(exist_ok=True)
+            Path(fh.name).replace(local)
+            print(f"   remote server: copy {local} to {CONTAINER_PATH} on the GoCD server, "
+                  "then re-run")
+        else:
+            subprocess.run(["docker", "cp", fh.name, f"{container}:{CONTAINER_PATH}"], check=True)
+            os.unlink(fh.name)
 
     # 2. authorization config (first run: GoCD is still open, so no credentials needed)
     auth = (sa, passwords[sa])

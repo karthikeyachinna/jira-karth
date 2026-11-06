@@ -1,0 +1,49 @@
+# Everything needed to set up the Jira release-notes flow on a GoCD server. NO SECRETS HERE
+# (public repo): JIRA_TOKEN, OPENAI_API_KEY and GoCD passwords stay in .env.
+#
+# New GoCD domain?  Copy this file, change the values, then run:
+#     gocd/bootstrap.sh                                  # uses gocd/gocd.yaml
+#     GOCD_CONFIG=gocd/prod.yaml gocd/bootstrap.sh       # or another file
+# Re-run any time you change this file (it is idempotent).
+
+gocd:
+  url: http://localhost:8153/go                    # how THIS machine reaches the GoCD server
+  agent_url: http://host.docker.internal:8153/go   # how agents and jobs reach it
+                                                   # (on a real domain, usually the same as url)
+  server_container: ""        # Docker container of the GoCD server, used to install the login
+                              # password file; "" = auto-detect; "none" = server is remote
+                              # (the file is written to output/ for you to copy to the server)
+  environment: jira-release   # GoCD environment holding the settings + secrets for the jobs
+  groups:                     # pipeline groups
+    connect: jira             #   jira-connect
+    spaces: jira-spaces       #   jira-space-<KEY>
+    approval: jira-approval   #   jira-release-notes, jira-approvals
+
+agents:
+  docker: true     # start local Docker agents (gocd/agent/). false = agents already exist
+  count: 3         # parallel space pipelines
+
+repo:              # the repo GoCD checks out (this code); a push to branch triggers jira-connect
+  url: https://github.com/karthikeyachinna/jira-karth.git
+  branch: main
+
+jira:
+  base_url: https://bommidikarthikeyachinna.atlassian.net
+  email: bommidi.karthikeya.chinna@gmail.com         # account that owns JIRA_TOKEN
+  spaces: [DEV, SCRUM, QS, SCR, SUP, SS]              # one jira-space-<KEY> pipeline each
+  ready_statuses: [Ready for Release, Released, Closed, Done]
+
+release:
+  number: release-26.1   # Jira fixVersion to build (RELEASE); "" = each space's next release
+  region: US             # US -> "Release Notes - Sprint <n>", INT -> "Evolus International - <rel>"
+
+ai:
+  model: gpt-5.4         # OpenAI model (OPENAI_API_KEY in .env)
+
+confluence:
+  space_key: "~629b28ed2eafc9006eee7310"   # "" = do not publish
+  parent_id: "327681"                      # page or folder the release notes go under
+
+auth:
+  enabled: true                  # GoCD login (password-file plugin)
+  access_file: gocd/access.yaml  # users, admins, roles, group permissions, approvers

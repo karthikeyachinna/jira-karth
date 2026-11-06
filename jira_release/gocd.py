@@ -19,6 +19,8 @@ from pathlib import Path
 
 import requests
 
+from . import deploy
+
 UPSTREAM = "jira-connect"
 UPSTREAM_STAGE = "connect-jira"
 SPACE_PREFIX = "jira-space-"
@@ -29,16 +31,16 @@ NOTES = "jira-release-notes"          # one combined document for all spaces
 NOTES_STAGE = "release-notes"
 NOTES_JOB = "combine"
 LEGACY = ["jira-release-spaces", "jira-release-approval"]   # earlier names, removed on sync
-# GoCD pipeline groups
-CONNECT_GROUP = "jira"
-SPACES_GROUP = "jira-spaces"
-APPROVAL_GROUP = "jira-approval"
+# names that differ per GoCD server come from gocd/gocd.yaml
+CONNECT_GROUP = deploy.group("connect")
+SPACES_GROUP = deploy.group("spaces")
+APPROVAL_GROUP = deploy.group("approval")
 GROUPS = (CONNECT_GROUP, SPACES_GROUP, APPROVAL_GROUP)
-ENVIRONMENT = "jira-release"
-REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
+ENVIRONMENT = deploy.environment()
+REPO_URL = deploy.repo_url()
 
 NO_AUTH = {"roles": [], "users": []}
-ACCESS_FILE = Path(__file__).resolve().parent.parent / "gocd" / "access.yaml"
+ACCESS_FILE = deploy.ROOT / deploy.get("auth.access_file", "gocd/access.yaml")
 
 
 def approval_access() -> dict | None:
@@ -63,7 +65,7 @@ def space_pipeline(space: str) -> str:
 def _git_material() -> dict:
     # code only - commits must not trigger these pipelines (jira-connect does)
     return {"type": "git", "attributes": {
-        "name": "repo", "url": REPO_URL, "branch": "main", "auto_update": True,
+        "name": "repo", "url": REPO_URL, "branch": deploy.repo_branch(), "auto_update": True,
         "shallow_clone": True, "filter": {"ignore": ["**/*", "*"]}, "invert_filter": False}}
 
 
@@ -181,7 +183,7 @@ def approval_config(release_label: str = "") -> dict:
 
 class GoCD:
     def __init__(self):
-        self.base = os.environ.get("GOCD_URL", "http://localhost:8153/go").rstrip("/")
+        self.base = deploy.gocd_url()
         user, pw = os.environ.get("GOCD_USER"), os.environ.get("GOCD_PASSWORD")
         self.auth = (user, pw) if user else None
 
