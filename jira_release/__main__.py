@@ -14,8 +14,19 @@ import re
 import sys
 from html import escape
 
-from .config import OUTPUT_DIR, Settings
+from .config import OUTPUT_DIR, ROOT, Settings
 from .jira import JiraClient, pick_release
+
+
+def release_from_file() -> str:
+    """The release written in the RELEASE file (first non-comment line), or ''."""
+    path = ROOT / "RELEASE"
+    if not path.is_file():
+        return ""
+    for line in path.read_text().splitlines():
+        if line.strip() and not line.strip().startswith("#"):
+            return line.strip()
+    return ""
 
 
 def cmd_check(settings: Settings) -> None:
@@ -32,15 +43,22 @@ def cmd_discover(settings: Settings) -> list[dict]:
         if missing:
             print(f"WARNING: spaces not visible to this token: {', '.join(sorted(missing))}")
 
+    target = release_from_file()
+    print(f"RELEASE file: {target or '(empty - using each space next unreleased version)'}\n")
     catalog = []
     for p in sorted(projects, key=lambda p: p["key"]):
         versions = jira.versions(p["key"])                     # released + unreleased
         unreleased = [v for v in versions if not v.get("released") and not v.get("archived")]
         released = sorted((v for v in versions if v.get("released")),
                           key=lambda v: v.get("releaseDate") or "", reverse=True)
-        current = pick_release(unreleased)
+        if target:   # the RELEASE file decides; spaces without that fixVersion are skipped
+            current = next((v for v in versions if v["name"] == target), None)
+        else:
+            current = pick_release(unreleased)
         catalog.append({
             "workspace": p["key"], "name": p["name"],
+            "target_release": target,
+            "label": target or (current["name"] if current else "no-release"),
             "current_release": current["name"] if current else None,
             "upcoming": [v["name"] for v in unreleased if v is not current],
             "released": [v["name"] for v in released],
@@ -51,19 +69,20 @@ def cmd_discover(settings: Settings) -> list[dict]:
     lines = ["| Space | Name | Current release (building) | Upcoming | Existing (released) |",
              "|---|---|---|---|---|"]
     for c in catalog:
-        lines.append(f"| {c['workspace']} | {c['name']} | {c['current_release'] or '—'} | "
+        building = c["current_release"] or (f"not in space ({target})" if target else "—")
+        lines.append(f"| {c['workspace']} | {c['name']} | {building} | "
                      f"{', '.join(c['upcoming']) or '—'} | {', '.join(c['released']) or '—'} |")
     table = "\n".join(lines)
     (OUTPUT_DIR / "workspaces.md").write_text(table + "\n")
     from .render import CSS
     rows = "".join(
         f"<tr><td><b>{escape(c['workspace'])}</b></td><td>{escape(c['name'])}</td>"
-        f"<td><b>{escape(c['current_release'] or '—')}</b></td>"
+        f"<td>{_badge(c['current_release']) if c['current_release'] else ('not in this space' if target else '—')}</td>"
         f"<td>{escape(', '.join(c['upcoming']) or '—')}</td>"
         f"<td>{escape(', '.join(c['released']) or '—')}</td></tr>" for c in catalog)
     (OUTPUT_DIR / "workspaces.html").write_text(
         f"<!doctype html><html><head><meta charset='utf-8'><style>{CSS}</style></head><body>"
-        "<h2>Jira spaces and releases</h2><table><thead><tr><th>Space</th><th>Name</th>"
+        f"<h2>Jira spaces and releases</h2><p>Release to build: {_badge(target or 'next unreleased per space')}</p><table><thead><tr><th>Space</th><th>Name</th>"
         "<th>Current release (building)</th><th>Upcoming</th><th>Existing (released)</th>"
         f"</tr></thead><tbody>{rows}</tbody></table></body></html>")
     print(table)
@@ -76,7 +95,16 @@ def cmd_sync(settings: Settings) -> None:
     catalog = cmd_discover(settings)
     if not catalog:
         raise SystemExit("No Jira spaces found - nothing to fan out")
+    target = release_from_file()
+    if target and not any(c["current_release"] for c in catalog):
+        raise SystemExit(f"RELEASE file says {target!r}, but no Jira space has that fixVersion. "
+                         "Create it in Jira or fix the RELEASE file.")
     GoCD().sync(catalog)
+
+
+def _badge(text: str) -> str:
+    return (f'<span style="background:#0052cc;color:#fff;font-weight:bold;padding:3px 10px;'
+            f'border-radius:4px;font-size:1.1em">{escape(text)}</span>')
 
 
 def _status_page(out_dir, message: str) -> None:
@@ -98,7 +126,8 @@ def cmd_generate(settings: Settings) -> None:
     if settings.release:
         version = jira.find_version(settings.workspace, settings.release)
         if not version:
-            raise SystemExit(f"Release {settings.release!r} not found in {settings.workspace}")
+            return _status_page(out, f"{settings.workspace}: release {settings.release} is not a "
+                                     "fixVersion in this space - skipped.")
     else:
         version = pick_release(jira.versions(settings.workspace, status="unreleased"))
         if not version:
@@ -113,11 +142,11 @@ def cmd_generate(settings: Settings) -> None:
 
     content = ai.write_content(settings, settings.workspace, version, issues)
 
-    title = f"Release Notes - {settings.workspace} {release}"
+    title = f"{release} — Release Notes — {settings.workspace}"
     existing = [r for r in os.environ.get("EXISTING_RELEASES", "").split(",") if r and r != "none"]
     body = render.build_body(settings.workspace, version, issues, content, settings.ready_statuses,
                              existing_releases=existing)
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{settings.workspace}-{release}")
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{release}_{settings.workspace}_release-notes")
 
     (out / "content.json").write_text(json.dumps(
         {"version": version, "issues": issues, "content": content}, indent=2))

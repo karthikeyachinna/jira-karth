@@ -39,7 +39,11 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
     is_draft = n_ready < len(issues) and not version.get("released")
 
     out = [
-        f"<h1>{escape(name)} Overview{' — DRAFT' if is_draft else ''}</h1>",
+        # release banner: the release number is the first and biggest thing on the page
+        f'<p style="background:#0052cc;color:#ffffff;font-size:22pt;font-weight:bold;'
+        f'padding:14px 18px;border-radius:6px;margin:0 0 6px 0">{escape(name)}</p>',
+        f"<h1>{escape(workspace)} Release Overview"
+        f"{' — DRAFT' if is_draft else ''}</h1>",
         f"<p><strong>Workspace:</strong> {escape(workspace)} · <strong>Release date:</strong> "
         f"{_fmt_date(version.get('releaseDate'))} · <strong>Total tickets:</strong> {len(issues)} · "
         f"<strong>Ready:</strong> {n_ready}/{len(issues)}</p>",

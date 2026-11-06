@@ -1,0 +1,5 @@
+# Release to build. Change the line below and merge to main:
+# GoCD then builds release notes for this Jira fixVersion in every space that has it,
+# and labels the pipeline runs with it (e.g. release-26.14-12).
+# Leave it empty to build each space's next unreleased version instead.
+release-26.1

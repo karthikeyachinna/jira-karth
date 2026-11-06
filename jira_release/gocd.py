@@ -103,7 +103,7 @@ def space_config(space: dict) -> dict:
     env = [
         _var("WORKSPACE", key),
         _var("RELEASE", current),                                   # what this run builds
-        _var("RELEASE_LABEL", current or "no-release"),             # shown as the run label
+        _var("RELEASE_LABEL", space.get("label") or current or "no-release"),  # run label
         _var("EXISTING_RELEASES", ",".join(space.get("released", [])) or "none"),
         _var("UPCOMING_RELEASES", ",".join(space.get("upcoming", [])) or "none"),
     ]
@@ -114,7 +114,7 @@ def space_config(space: dict) -> dict:
                      label="${env:RELEASE_LABEL}-${COUNT}", env=env)
 
 
-def approval_config(spaces: list[str]) -> dict:
+def approval_config(spaces: list[str], release_label: str = "") -> dict:
     fetches = [{"type": "fetch", "attributes": {
         "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
@@ -124,7 +124,9 @@ def approval_config(spaces: list[str]) -> dict:
                      + [_git_material()],
                      # manual first stage: runs only when someone clicks Approve
                      [_stage("approval", "manual",
-                             [_job("publish-confluence", fetches + [_exec("publish")])])])
+                             [_job("publish-confluence", fetches + [_exec("publish")])])],
+                     label="${env:RELEASE_LABEL}-${COUNT}",
+                     env=[_var("RELEASE_LABEL", release_label or "release")])
 
 
 class GoCD:
@@ -186,7 +188,7 @@ class GoCD:
         self.upsert(connect_config())
         for c in catalog:
             self.upsert(space_config(c))
-        self.upsert(approval_config(spaces))     # rewire fan-in before deleting old spaces
+        self.upsert(approval_config(spaces, catalog[0].get("target_release", "") if catalog else ""))     # rewire fan-in before deleting old spaces
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
 
         wanted = {space_pipeline(s) for s in spaces}
