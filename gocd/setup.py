@@ -25,7 +25,8 @@ AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get(
 REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_config_repo()
 ENV_NAME = "jira-release"
 SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY"}
-SKIP = {"WORKSPACE", "RELEASE"}  # chosen per run via "Trigger with options"
+SKIP = {"WORKSPACE"}  # set per space pipeline
+# RELEASE (e.g. release-26.14) from .env goes to the environment: the release every pipeline builds
 
 
 def api(method: str, path: str, version: int, **kw) -> requests.Response:

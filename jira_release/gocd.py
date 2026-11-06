@@ -90,7 +90,9 @@ def connect_config() -> dict:
     repo = _git_material()
     repo["attributes"]["filter"] = None          # code changes DO trigger jira-connect
     repo["attributes"]["shallow_clone"] = False
-    return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])])
+    # run label = the RELEASE variable from the jira-release environment, e.g. "release-26.1-13"
+    return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])],
+                     label="${env:RELEASE}-${COUNT}")
 
 
 def space_config(space: dict) -> dict:

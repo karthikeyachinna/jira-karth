@@ -14,19 +14,14 @@ import re
 import sys
 from html import escape
 
-from .config import OUTPUT_DIR, ROOT, Settings
+from .config import OUTPUT_DIR, Settings
 from .jira import JiraClient, pick_release
 
 
-def release_from_file() -> str:
-    """The release written in the RELEASE file (first non-comment line), or ''."""
-    path = ROOT / "RELEASE"
-    if not path.is_file():
-        return ""
-    for line in path.read_text().splitlines():
-        if line.strip() and not line.strip().startswith("#"):
-            return line.strip()
-    return ""
+def target_release() -> str:
+    """The release to build: the RELEASE variable (GoCD environment "jira-release", .env, or
+    "Trigger with options"). Empty = each space builds its next unreleased version."""
+    return os.environ.get("RELEASE", "").strip()
 
 
 def cmd_check(settings: Settings) -> None:
@@ -43,8 +38,8 @@ def cmd_discover(settings: Settings) -> list[dict]:
         if missing:
             print(f"WARNING: spaces not visible to this token: {', '.join(sorted(missing))}")
 
-    target = release_from_file()
-    print(f"RELEASE file: {target or '(empty - using each space next unreleased version)'}\n")
+    target = target_release()
+    print(f"RELEASE: {target or '(not set - using each space next unreleased version)'}\n")
     catalog = []
     for p in sorted(projects, key=lambda p: p["key"]):
         versions = jira.versions(p["key"])                     # released + unreleased
@@ -95,10 +90,10 @@ def cmd_sync(settings: Settings) -> None:
     catalog = cmd_discover(settings)
     if not catalog:
         raise SystemExit("No Jira spaces found - nothing to fan out")
-    target = release_from_file()
+    target = target_release()
     if target and not any(c["current_release"] for c in catalog):
-        raise SystemExit(f"RELEASE file says {target!r}, but no Jira space has that fixVersion. "
-                         "Create it in Jira or fix the RELEASE file.")
+        raise SystemExit(f"RELEASE={target!r}, but no Jira space has that fixVersion. "
+                         "Create it in Jira or fix the RELEASE variable.")
     GoCD().sync(catalog)
 
 
