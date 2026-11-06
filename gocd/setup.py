@@ -76,6 +76,11 @@ def main() -> None:
         "material": {"type": "git", "attributes": {"url": REPO_URL, "branch": "main",
                                                    "auto_update": True}},
         "configuration": [{"key": "file_pattern", "value": ".gocd/*.gocd.yaml"}],
+        # GoCD only lets a config repo define pipelines in groups it is explicitly allowed to use
+        "rules": [{"directive": "allow", "action": "refer", "type": "pipeline_group",
+                   "resource": "jira"},
+                  {"directive": "allow", "action": "refer", "type": "environment",
+                   "resource": ENV_NAME}],
     })
 
     # wait for the YAML to be parsed so the pipeline exists
@@ -86,13 +91,11 @@ def main() -> None:
     else:
         print(f"! pipeline {PIPELINE} not visible yet - push .gocd/ to GitHub, then re-run")
 
-    pipeline_exists = api("GET", f"/admin/pipelines/{PIPELINE}", 11).status_code == 200
-
     # 2. environment with variables (secure ones encrypted by GoCD)
     variables = [{"name": k, "value": v, "secure": k in SECURE} for k, v in sorted(values.items())]
     upsert(f"/admin/environments/{ENV_NAME}", 3, {
         "name": ENV_NAME,
-        "pipelines": [{"name": PIPELINE}] if pipeline_exists else [],
+        "pipelines": [],  # the pipeline joins via the environments: block in the YAML
         "environment_variables": variables,
     })
     print("  variables: " + ", ".join(f"{v['name']}{' (secure)' if v['secure'] else ''}"

@@ -1,7 +1,11 @@
-# GoCD pipeline-as-code (yaml.config.plugin). Registered via gocd/setup.sh.
+# GoCD pipeline-as-code (yaml.config.plugin). Registered via gocd/setup.py.
 # Secrets (JIRA_TOKEN, OPENAI_API_KEY) are NOT here: they live as secure variables on the
-# GoCD environment "jira-release", which setup.sh creates from your local .env.
+# GoCD environment "jira-release", which setup.py creates from your local .env.
 format_version: 10
+environments:
+  jira-release:          # variables + agents are attached by gocd/setup.py
+    pipelines:
+      - jira-release-notes
 pipelines:
   jira-release-notes:
     group: jira
