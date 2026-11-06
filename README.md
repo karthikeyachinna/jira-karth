@@ -6,7 +6,7 @@ renders them to HTML and PDF, and after a manual approval publishes them to Conf
 ```
                     ┌─▶ jira-space-DEV   ─┐
                     ├─▶ jira-space-QS    ─┤
-   jira-connect ────┼─▶ jira-space-SCR   ─┼──▶ jira-release-approval (manual) ──▶ Confluence
+   jira-connect ────┼─▶ jira-space-SCR   ─┼──▶ jira-approvals (manual) ──▶ Confluence
                     ├─▶ jira-space-SCRUM ─┤
                     └─▶ jira-space-SUP   ─┘
 ```
@@ -15,7 +15,9 @@ renders them to HTML and PDF, and after a manual approval publishes them to Conf
 |---|---|
 | `jira-connect` | Connects to Jira and lists the spaces in `JIRA_WORKSPACES`. Creates or updates one pipeline per space, and deletes pipelines for spaces that were removed. |
 | `jira-space-<KEY>` | Picks the space's next unreleased fixVersion and its tickets, has OpenAI write the notes, then builds the HTML and PDF. Skips the space if it has no release or no tickets. |
-| `jira-release-approval` | Waits for all the space pipelines. When you click ▶, it publishes every space's notes to Confluence with the PDF attached. |
+| `jira-approvals` | Waits for all the space pipelines. When you click ▶, it publishes every space's notes to Confluence with the PDF attached. |
+
+GoCD groups: **jira** → `jira-connect` · **jira-spaces** → `jira-space-*` · **jira-approval** → `jira-approvals`.
 
 All pipelines are defined in Python (`jira_release/gocd.py`) and created through the GoCD API.
 
@@ -33,7 +35,7 @@ this repo is public.
 ## Run
 
 In GoCD, click ▶ on **jira-connect**. The space pipelines start on their own. Each one has a
-**release-notes** tab and a PDF under its artifacts. Then click ▶ on **jira-release-approval**
+**release-notes** tab and a PDF under its artifacts. Then click ▶ on **jira-approvals**
 to publish to Confluence.
 
 ## Local commands

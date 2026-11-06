@@ -6,7 +6,7 @@
    secret is ever committed to the public repo.
 2. Adds every registered agent to that environment.
 3. Creates all pipelines (jira-connect, one jira-space-<KEY> per Jira space,
-   jira-release-approval) from jira_release/gocd.py via `gocd/run.sh sync`.
+   jira-approvals) from jira_release/gocd.py via `gocd/run.sh sync`.
    Removes the old YAML config repo if it is still registered.
 
 Usage:  python3 gocd/setup.py            (GOCD_URL defaults to http://localhost:8153/go)
@@ -105,8 +105,9 @@ def migrate_from_config_repo() -> None:
         return
     groups = api("GET", "/admin/pipeline_groups", 1).json()["_embedded"]["groups"]
     generated = [p["name"] for g in groups for p in g.get("pipelines", [])
-                 if p["name"] == "jira-release-approval" or p["name"].startswith("jira-space-")]
-    generated.sort(key=lambda n: n != "jira-release-approval")   # downstream first
+                 if p["name"] in ("jira-release-approval", "jira-approvals")
+                 or p["name"].startswith("jira-space-")]
+    generated.sort(key=lambda n: n.startswith("jira-space-"))   # downstream (approval) first
     env = api("GET", f"/admin/environments/{ENV_NAME}", 3)
     if env.status_code == 200:
         in_env = {p["name"] for p in env.json().get("pipelines", [])}

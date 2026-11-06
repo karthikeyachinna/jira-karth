@@ -2,7 +2,7 @@
 
                       ┌─▶ jira-space-DEV   ─┐
                       ├─▶ jira-space-QS    ─┤
-    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-release-approval (manual)
+    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-approvals (manual)
     (config repo)     ├─▶ jira-space-SCRUM ─┤
                       └─▶ jira-space-SUP   ─┘
 
@@ -23,9 +23,13 @@ UPSTREAM_STAGE = "connect-jira"
 SPACE_PREFIX = "jira-space-"
 SPACE_STAGE = "release-notes"
 SPACE_JOB = "generate"
-APPROVAL = "jira-release-approval"
-LEGACY = ["jira-release-spaces"]          # earlier single-pipeline layout, removed on sync
-GROUP = "jira"
+APPROVAL = "jira-approvals"
+LEGACY = ["jira-release-spaces", "jira-release-approval"]   # earlier names, removed on sync
+# GoCD pipeline groups
+CONNECT_GROUP = "jira"
+SPACES_GROUP = "jira-spaces"
+APPROVAL_GROUP = "jira-approval"
+GROUPS = (CONNECT_GROUP, SPACES_GROUP, APPROVAL_GROUP)
 ENVIRONMENT = "jira-release"
 REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
 
@@ -67,8 +71,8 @@ def _job(name: str, tasks: list[dict], **extra) -> dict:
             "tabs": [], "artifacts": [], "tasks": tasks, **extra}
 
 
-def _pipeline(name: str, materials: list[dict], stages: list[dict]) -> dict:
-    return {"group": GROUP, "pipeline": {
+def _pipeline(group: str, name: str, materials: list[dict], stages: list[dict]) -> dict:
+    return {"group": group, "pipeline": {
         "name": name, "label_template": "${COUNT}", "lock_behavior": "unlockWhenFinished",
         "materials": materials, "stages": stages}}
 
@@ -81,7 +85,7 @@ def connect_config() -> dict:
     repo = _git_material()
     repo["attributes"]["filter"] = None          # code changes DO trigger jira-connect
     repo["attributes"]["shallow_clone"] = False
-    return _pipeline(UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])])
+    return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])])
 
 
 def space_config(space: str) -> dict:
@@ -89,7 +93,7 @@ def space_config(space: str) -> dict:
                environment_variables=[{"name": "WORKSPACE", "value": space, "secure": False}],
                tabs=[{"name": "release-notes", "path": f"{space}/release_notes.html"}],
                artifacts=[{"type": "build", "source": f"output/{space}", "destination": ""}])
-    return _pipeline(space_pipeline(space),
+    return _pipeline(SPACES_GROUP, space_pipeline(space),
                      [_dependency(UPSTREAM, UPSTREAM_STAGE), _git_material()],
                      [_stage(SPACE_STAGE, "success", [job])])
 
@@ -99,7 +103,7 @@ def approval_config(spaces: list[str]) -> dict:
         "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
         "run_if": ["passed"]}} for s in spaces]
-    return _pipeline(APPROVAL,
+    return _pipeline(APPROVAL_GROUP, APPROVAL,
                      [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
                      + [_git_material()],
                      # manual first stage: runs only when someone clicks Approve
@@ -132,7 +136,7 @@ class GoCD:
             print(f"[gocd] created  {name}")
         else:
             self.call("PUT", f"/admin/pipelines/{name}", 11,
-                      json={**body["pipeline"], "group": GROUP},
+                      json={**body["pipeline"], "group": body["group"]},
                       headers={"If-Match": existing.headers["ETag"]})
             print(f"[gocd] updated  {name}")
 
@@ -145,7 +149,7 @@ class GoCD:
 
     def pipeline_names(self) -> list[str]:
         groups = self.call("GET", "/admin/pipeline_groups", 1).json()
-        return [p["name"] for g in groups["_embedded"]["groups"] if g["name"] == GROUP
+        return [p["name"] for g in groups["_embedded"]["groups"] if g["name"] in GROUPS
                 for p in g.get("pipelines", [])]
 
     # ---- environment ------------------------------------------------------
