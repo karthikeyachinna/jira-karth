@@ -91,7 +91,7 @@ class GoCD:
                    "Content-Type": "application/json", **kw.pop("headers", {})}
         r = requests.request(method, f"{self.base}/api{path}", headers=headers,
                              auth=self.auth, timeout=30, **kw)
-        if r.status_code >= 400 and r.status_code != 404:
+        if r.status_code >= 400 and r.status_code not in (404, 409):  # 409 = already unpaused
             raise SystemExit(f"GoCD {method} {path} -> {r.status_code}: {r.text[:500]}")
         return r
 
