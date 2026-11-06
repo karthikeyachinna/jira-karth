@@ -118,7 +118,8 @@ class GoCD:
             self.call("POST", f"/pipelines/{name}/unpause", 1, headers={"X-GoCD-Confirm": "true"})
             print(f"[gocd] created  {name}")
         else:
-            self.call("PUT", f"/admin/pipelines/{name}", 11, json=body["pipeline"],
+            self.call("PUT", f"/admin/pipelines/{name}", 11,
+                      json={**body["pipeline"], "group": GROUP},
                       headers={"If-Match": existing.headers["ETag"]})
             print(f"[gocd] updated  {name}")
 
