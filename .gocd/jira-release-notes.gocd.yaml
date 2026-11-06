@@ -1,0 +1,50 @@
+# GoCD pipeline-as-code (yaml.config.plugin). Registered via gocd/setup.sh.
+# Secrets (JIRA_TOKEN, OPENAI_API_KEY) are NOT here: they live as secure variables on the
+# GoCD environment "jira-release", which setup.sh creates from your local .env.
+format_version: 10
+pipelines:
+  jira-release-notes:
+    group: jira
+    label_template: "${COUNT}"
+    lock_behavior: unlockWhenFinished
+    display_order: 1
+    materials:
+      repo:
+        git: https://github.com/karthikeyachinna/jira-karth.git
+        branch: main
+    environment_variables:
+      # Selection - set these with "Trigger with options" in the GoCD UI.
+      WORKSPACE: ""        # Jira project key, e.g. EVO
+      RELEASE: ""          # Jira fixVersion, e.g. release-26.14
+    stages:
+      - connect-jira:
+          clean_workspace: true
+          jobs:
+            discover-workspaces:
+              artifacts:
+                - build:
+                    source: output/workspaces.*
+                    destination: workspaces
+              tabs:
+                workspaces: workspaces/workspaces.md
+              tasks:
+                - exec:
+                    command: gocd/run.sh
+                    arguments: [check]
+                - exec:
+                    command: gocd/run.sh
+                    arguments: [discover]
+      - release-notes:
+          jobs:
+            generate-release-notes:
+              timeout: 30
+              artifacts:
+                - build:
+                    source: output/*
+                    destination: release-notes
+              tabs:
+                release-notes: release-notes/release_notes.html
+              tasks:
+                - exec:
+                    command: gocd/run.sh
+                    arguments: [generate]

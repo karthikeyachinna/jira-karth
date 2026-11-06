@@ -1,0 +1,10 @@
+# secrets & internal docs - this repo is public
+.env
+*.pdf
+!docs/*.pdf
+
+# runtime
+.venv/
+output/
+__pycache__/
+*.pyc

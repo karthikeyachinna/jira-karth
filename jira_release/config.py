@@ -1,0 +1,67 @@
+"""Settings loaded from environment variables (GoCD env/secure vars) with a local .env fallback."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+OUTPUT_DIR = ROOT / "output"
+
+
+def _load_dotenv(path: Path) -> None:
+    """Minimal .env loader. Real environment variables always win (GoCD sets them)."""
+    if not path.is_file():
+        return
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.split(" #", 1)[0].strip().strip('"').strip("'")
+        os.environ.setdefault(key.strip(), value)
+
+
+def _csv(name: str, default: str = "") -> list[str]:
+    return [v.strip() for v in os.environ.get(name, default).split(",") if v.strip()]
+
+
+@dataclass
+class Settings:
+    jira_base_url: str
+    jira_email: str
+    jira_token: str
+    workspaces: list[str]
+    ready_statuses: list[str]
+    openai_api_key: str
+    openai_model: str
+    confluence_space_key: str
+    confluence_parent_page_id: str
+    # selection (GoCD "Trigger with options")
+    workspace: str = ""
+    release: str = ""
+    extra: dict = field(default_factory=dict)
+
+    @classmethod
+    def load(cls) -> "Settings":
+        _load_dotenv(ROOT / ".env")
+        return cls(
+            jira_base_url=os.environ.get("JIRA_BASE_URL", "").rstrip("/"),
+            jira_email=os.environ.get("JIRA_EMAIL", ""),
+            jira_token=os.environ.get("JIRA_TOKEN", ""),
+            workspaces=[w.upper() for w in _csv("JIRA_WORKSPACES")],
+            ready_statuses=_csv("READY_STATUSES", "Ready for Release,Released,Closed,Done"),
+            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+            openai_model=os.environ.get("OPENAI_MODEL", "gpt-5"),
+            confluence_space_key=os.environ.get("CONFLUENCE_SPACE_KEY", ""),
+            confluence_parent_page_id=os.environ.get("CONFLUENCE_PARENT_PAGE_ID", ""),
+            workspace=os.environ.get("WORKSPACE", "").strip().upper(),
+            release=os.environ.get("RELEASE", "").strip(),
+        )
+
+    def require_jira(self) -> None:
+        missing = [n for n, v in (("JIRA_BASE_URL", self.jira_base_url),
+                                  ("JIRA_EMAIL", self.jira_email),
+                                  ("JIRA_TOKEN", self.jira_token)) if not v]
+        if missing:
+            raise SystemExit(f"Missing required settings: {', '.join(missing)}")
