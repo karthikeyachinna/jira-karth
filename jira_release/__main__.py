@@ -3,8 +3,9 @@
     python -m jira_release check      # verify Jira credentials
     python -m jira_release discover   # list spaces and the release each one will build
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
-    python -m jira_release generate   # jira-space-<KEY> pipeline: release notes for $WORKSPACE [$RELEASE]
-    python -m jira_release publish    # jira-approvals pipeline: publish every generated space to Confluence
+    python -m jira_release generate   # jira-space-<KEY> pipeline: collect $WORKSPACE's tickets
+    python -m jira_release combine    # jira-release-notes pipeline: ONE AI release notes, all spaces
+    python -m jira_release publish    # jira-approvals pipeline: publish it to Confluence
 """
 from __future__ import annotations
 
@@ -143,7 +144,7 @@ def _cancel_self() -> bool:
 
 
 def cmd_generate(settings: Settings) -> None:
-    from . import ai, render
+    from . import render
 
     if not settings.workspace:
         raise SystemExit("WORKSPACE is not set (each space job sets it)")
@@ -172,20 +173,53 @@ def cmd_generate(settings: Settings) -> None:
         return _status_page(out, f"{settings.workspace} / {release}: no tickets on this "
                                  "fixVersion - skipped.")
 
-    content = ai.write_content(settings, settings.workspace, version, issues)
+    # collect only - the AI runs once over ALL spaces in `combine`
+    (out / "space.json").write_text(json.dumps(
+        {"workspace": settings.workspace, "version": version, "issues": issues}, indent=2))
+    rows = "".join(f"<tr><td>{escape(i['key'])}</td><td>{escape(i['type'])}</td>"
+                   f"<td>{escape(i['status'])}</td><td>{escape(i['summary'])}</td></tr>"
+                   for i in issues)
+    (out / "release_notes.html").write_text(
+        f"<!doctype html><html><head><meta charset='utf-8'><style>{render.CSS}</style></head>"
+        f"<body><p>{_badge(release)}</p><h2>{escape(settings.workspace)}: {len(issues)} tickets "
+        "collected</h2><p>They are merged with the other spaces and written up by AI in the "
+        "<b>jira-release-notes</b> pipeline.</p><table><thead><tr><th>Key</th><th>Type</th>"
+        f"<th>Status</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></body></html>")
+    print(f"[done] collected {len(issues)} tickets for {settings.workspace} / {release}")
 
-    title = f"{release} — Release Notes — {settings.workspace}"
+
+def cmd_combine(settings: Settings) -> None:
+    """jira-release-notes pipeline: merge every space's tickets, one AI pass, one document."""
+    from . import ai, render
+
+    spaces = [json.loads(p.read_text()) for p in sorted(OUTPUT_DIR.glob("*/space.json"))]
+    out = OUTPUT_DIR / "combined"
+    out.mkdir(parents=True, exist_ok=True)
+    spaces = [s for s in spaces if s["issues"]]
+    if not spaces:
+        return _skip(out, "No space has tickets on this release - nothing to write.")
+
+    version = spaces[0]["version"]
+    release = version["name"]
+    issues = [i for s in spaces for i in s["issues"]]
+    names = ", ".join(s["workspace"] for s in spaces)
+    print(f"[combine] {release}: {len(issues)} tickets from {names}")
+
+    content = ai.write_content(settings, names, version, issues)
+    kept = sum(len(t["issue_keys"]) for t in content["headline_themes"])
+    print(f"[ai] {kept} tickets in {len(content['headline_themes'])} themes, "
+          f"{len(content.get('excluded', []))} filtered out")
+
+    title = f"{release} — Release Notes"
     existing = [r for r in os.environ.get("EXISTING_RELEASES", "").split(",") if r and r != "none"]
-    body = render.build_body(settings.workspace, version, issues, content, settings.ready_statuses,
+    body = render.build_body(names, version, issues, content, settings.ready_statuses,
                              existing_releases=existing)
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{release}_{settings.workspace}_release-notes")
-
     (out / "content.json").write_text(json.dumps(
         {"version": version, "issues": issues, "content": content}, indent=2))
     (out / "body.xhtml").write_text(body)
     html_path = out / "release_notes.html"           # fixed name -> GoCD custom tab
     html_path.write_text(render.build_page(title, body))
-    pdf_path = out / f"{slug}.pdf"
+    pdf_path = out / f"{re.sub(r'[^A-Za-z0-9._-]+', '-', release)}_release-notes.pdf"
     has_pdf = render.html_to_pdf(html_path, pdf_path)
     (out / "meta.json").write_text(json.dumps(
         {"title": title, "pdf": pdf_path.name if has_pdf else None}))
@@ -193,9 +227,9 @@ def cmd_generate(settings: Settings) -> None:
 
 
 def cmd_publish(settings: Settings) -> None:
-    metas = sorted(OUTPUT_DIR.glob("*/meta.json"))
+    metas = sorted(OUTPUT_DIR.glob("combined/meta.json"))
     if not metas:
-        print("Nothing to publish - no space produced release notes.")
+        print("Nothing to publish - no combined release notes were produced.")
         return
     if not settings.confluence_space_key:
         print("CONFLUENCE_SPACE_KEY not set - approved, but nothing is published.")
@@ -211,7 +245,7 @@ def cmd_publish(settings: Settings) -> None:
 
 def main() -> None:
     commands = {"check": cmd_check, "discover": cmd_discover, "sync": cmd_sync,
-                "generate": cmd_generate, "publish": cmd_publish}
+                "generate": cmd_generate, "combine": cmd_combine, "publish": cmd_publish}
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
         raise SystemExit(__doc__)
     commands[sys.argv[1]](Settings.load())

@@ -1,4 +1,4 @@
-"""AI agent that writes the narrative parts of the release notes with OpenAI.
+"""AI agent that filters and groups ALL spaces' tickets into one release notes document.
 
 Ticket tables are built from Jira data in code; the model writes the prose (overview, themes,
 deploy tasks, readiness, post-deploy). The house style is defined in code below (STYLE_GUIDE),
@@ -14,8 +14,8 @@ from .config import Settings
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["overview", "headline_themes", "change_implementation", "database_changes",
-                 "readiness_warnings", "post_deployment"],
+    "required": ["overview", "headline_themes", "excluded", "change_implementation",
+                 "database_changes", "readiness_warnings", "validation_plan", "post_deployment"],
     "properties": {
         "overview": {"type": "string",
                      "description": "2-4 sentence overview of the release."},
@@ -38,6 +38,23 @@ SCHEMA = {
                 "required": ["task", "description", "workflow", "duration", "implementer"],
                 "properties": {k: {"type": "string"} for k in
                                ("task", "description", "workflow", "duration", "implementer")},
+            },
+        },
+        "excluded": {
+            "type": "array",
+            "description": "Tickets the AI filtered OUT of the release notes, with the reason.",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["key", "reason"],
+                "properties": {"key": {"type": "string"}, "reason": {"type": "string"}},
+            },
+        },
+        "validation_plan": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["step", "expected"],
+                "properties": {"step": {"type": "string"}, "expected": {"type": "string"}},
             },
         },
         "database_changes": {"type": "string"},
@@ -68,18 +85,29 @@ STYLE_GUIDE = """House style for release notes (the layout the PDF renderer prin
    - "Blocked: KEY-1 (<summary>). Unblock or move to the next release."
    - "Still in development: KEY-1 (<status>)"
    - "Unassigned and not ready: KEY-1, KEY-2"
-6. Post-Deployment Activities - 3-6 imperative bullets: monitoring report the morning after,
+6. Validation Plan - 5-12 rows, one per user-facing flow from the themes: a short step name
+   ("Subscription cancel and edit") and the expected result after deploy. Row 1 is always
+   "All apps running" - every production URL is up after deploy.
+7. Post-Deployment Activities - 3-6 imperative bullets: monitoring report the morning after,
    confirm key user flows from the themes, watch new jobs or campaigns, record validation and
    change-management (SOX) evidence against the release.
 
 Tone: short factual sentences, present tense, ticket keys cited, no marketing language, no emoji."""
 
-SYSTEM = f"""You write release notes for an engineering release, for DevOps, QA and product readers.
+SYSTEM = f"""You write ONE consolidated release notes document for an engineering release that
+spans several Jira spaces (projects), for DevOps, QA and product readers.
 
 {STYLE_GUIDE}
 
+Filtering (you decide what belongs in the release notes):
+- Group tickets by WHAT CHANGED for users, across projects - a theme may mix keys from several
+  spaces (e.g. EVO-1 and ECP-7 both in "Subscriptions"). Never make a theme per project.
+- Put into `excluded` (with a one-line reason) tickets that do not belong in release notes:
+  sub-tasks or duplicates of another ticket in the list, test / spike / placeholder tickets,
+  tickets with no meaningful summary, and Cancelled / Won't Do tickets.
+- Every ticket key appears exactly once: in one headline theme OR in excluded.
+
 Rules:
-- Put EVERY ticket into exactly one headline theme; issue_keys lists them.
 - Only state facts supported by the ticket data. When something is unknown (durations, workflows,
   DB scripts), write "TBD" rather than inventing it.
 - A ticket counts as ready when its status is one of the ready_statuses in the input."""
@@ -98,7 +126,8 @@ def write_with_openai(settings: Settings, workspace: str, version: dict, issues:
         "tickets": issues,
     }
 
-    print(f"[ai] calling OpenAI {settings.openai_model} with {len(issues)} tickets ...")
+    print(f"[ai] calling OpenAI {settings.openai_model} with {len(issues)} tickets from "
+          f"{len({i['project'] for i in issues})} space(s) ...")
     response = client.responses.create(
         model=settings.openai_model,
         instructions=SYSTEM,
@@ -144,6 +173,9 @@ def write_without_ai(settings: Settings, workspace: str, version: dict, issues: 
         "change_implementation": [{"task": "Task-1", "description": "Deploy release branch",
                                    "workflow": "TBD", "duration": "TBD",
                                    "implementer": "@DevOps Team"}],
+        "excluded": [],
+        "validation_plan": [{"step": "All apps running",
+                             "expected": "Every production URL is up after deploy."}],
         "database_changes": "TBD",
         "readiness_warnings": warnings,
         "post_deployment": ["Run the validation plan and record results."],

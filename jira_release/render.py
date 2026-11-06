@@ -42,13 +42,18 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
         # release banner: the release number is the first and biggest thing on the page
         f'<p style="background:#0052cc;color:#ffffff;font-size:22pt;font-weight:bold;'
         f'padding:14px 18px;border-radius:6px;margin:0 0 6px 0">{escape(name)}</p>',
-        f"<h1>{escape(workspace)} Release Overview"
+        f"<h1>Release {escape(name.replace('release-', ''))} Overview"
         f"{' — DRAFT' if is_draft else ''}</h1>",
-        f"<p><strong>Workspace:</strong> {escape(workspace)} · <strong>Release date:</strong> "
+        f"<p><strong>Spaces:</strong> {escape(workspace)} · <strong>Release date:</strong> "
         f"{_fmt_date(version.get('releaseDate'))} · <strong>Total tickets:</strong> {len(issues)} · "
         f"<strong>Ready:</strong> {n_ready}/{len(issues)}</p>",
         f"<p>{escape(content['overview'])}</p>",
         f"<p><em>Generated from the Jira fixVersion on {date.today():%a, %b %-d, %Y}.</em></p>",
+        "<h2>Release Schedule</h2>",
+        _table(["Milestone", "Date"], [
+            ["Sprint Start", _fmt_date(version.get("startDate"))],
+            ["Sprint End / Release", _fmt_date(version.get("releaseDate"))],
+        ]),
         "<h2>Release Information</h2>",
         _table(["Field", "Value"], [
             ["Release Number", escape(name)],
@@ -57,7 +62,14 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
             ["Release Date", _fmt_date(version.get("releaseDate"))],
             ["Released", "Yes" if version.get("released") else "No"],
             ["Description", escape(version.get("description") or "—")],
+            ["Implementer(s)", "@DevOps Team"],
+            ["Release sign-off", "Released" if version.get("released") else "pending"],
         ]),
+        "<h2>Spaces in this release</h2>",
+        _table(["Space", "Tickets", "Ready"], [
+            [escape(p), str(sum(1 for i in issues if i["project"] == p)),
+             str(sum(1 for i in issues if i["project"] == p and i["status"].lower() in ready))]
+            for p in sorted({i["project"] for i in issues})]),
         "<h2>Headline Themes</h2>",
         "<ul>" + "".join(
             f"<li><strong>{escape(t['name'])} ({len(t['issue_keys'])})</strong> — "
@@ -71,7 +83,9 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
 
     placed: set[str] = set()
     themes = list(content["headline_themes"])
-    leftovers = [k for k in by_key if k not in {x for t in themes for x in t["issue_keys"]}]
+    excluded = {e["key"]: e["reason"] for e in content.get("excluded", []) if e["key"] in by_key}
+    leftovers = [k for k in by_key if k not in excluded
+                 and k not in {x for t in themes for x in t["issue_keys"]}]
     if leftovers:
         themes.append({"name": "Other", "summary": "", "issue_keys": leftovers})
     for theme in themes:
@@ -91,7 +105,16 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
         "<h2>Release Readiness — Scope Warnings</h2>",
         "<p>" + escape(", ".join(f"{s}: {n}" for s, n in status_counts.most_common())) + "</p>",
         _ul(content["readiness_warnings"]),
+        "<h2>Validation Plan</h2>",
+        _table(["#", "Validation Step", "Expected Result", "Validator"],
+               [[str(n), escape(v["step"]), escape(v["expected"]), "TBD"]
+                for n, v in enumerate(content.get("validation_plan", []), 1)]),
         "<h2>Post-Deployment Activities</h2>", _ul(content["post_deployment"]),
+        "<h2>Filtered out by AI (not in the release notes)</h2>",
+        _table(["Key", "Summary", "Reason"], [
+            [f'<a href="{escape(by_key[k]["url"])}">{escape(k)}</a>',
+             escape(by_key[k]["summary"]), escape(r)] for k, r in excluded.items()])
+        if excluded else "<p>None - every ticket is in the notes.</p>",
         "<h2>Release History</h2>",
         f"<p><strong>Current:</strong> {escape(name)}</p>",
         "<p><strong>Existing releases:</strong> "

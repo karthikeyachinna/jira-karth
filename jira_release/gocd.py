@@ -2,8 +2,8 @@
 
                       ┌─▶ jira-space-DEV   ─┐
                       ├─▶ jira-space-QS    ─┤
-    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-approvals (manual)
-    (config repo)     ├─▶ jira-space-SCRUM ─┤
+    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-release-notes ──▶ jira-approvals (manual)
+                      ├─▶ jira-space-SCRUM ─┤    (one AI document)
                       └─▶ jira-space-SUP   ─┘
 
 Every pipeline is defined here and written through the GoCD API (not a YAML config repo):
@@ -25,6 +25,9 @@ SPACE_PREFIX = "jira-space-"
 SPACE_STAGE = "release-notes"
 SPACE_JOB = "generate"
 APPROVAL = "jira-approvals"
+NOTES = "jira-release-notes"          # one combined document for all spaces
+NOTES_STAGE = "release-notes"
+NOTES_JOB = "combine"
 LEGACY = ["jira-release-spaces", "jira-release-approval"]   # earlier names, removed on sync
 # GoCD pipeline groups
 CONNECT_GROUP = "jira"
@@ -143,17 +146,34 @@ def space_config(space: dict) -> dict:
                      [_stage(SPACE_STAGE, "success", [job])], label=label, env=env)
 
 
-def approval_config(spaces: list[str], release_label: str = "") -> dict:
+def notes_config(spaces: list[str], release_label: str = "") -> dict:
+    """ONE release-notes document for the release: fan-in from every space that builds it,
+    fetch their collected tickets, one AI pass (filter + group across spaces), HTML + PDF."""
     fetches = [{"type": "fetch", "attributes": {
         "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
         "run_if": ["passed"]}} for s in spaces]
-    return _pipeline(APPROVAL_GROUP, APPROVAL,
+    job = _job(NOTES_JOB, fetches + [_exec("combine")],
+               tabs=[{"name": "release-notes", "path": "combined/release_notes.html"}],
+               artifacts=[{"type": "build", "source": "output/combined", "destination": ""}])
+    return _pipeline(APPROVAL_GROUP, NOTES,
                      [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
                      + [_git_material()],
-                     # manual first stage: runs only when someone clicks Approve
+                     [_stage(NOTES_STAGE, "success", [job])],
+                     label="${env:RELEASE_LABEL}-${COUNT}",
+                     env=[_var("RELEASE_LABEL", release_label or "release")])
+
+
+def approval_config(release_label: str = "") -> dict:
+    fetch = {"type": "fetch", "attributes": {
+        "artifact_origin": "gocd", "pipeline": NOTES, "stage": NOTES_STAGE, "job": NOTES_JOB,
+        "is_source_a_file": False, "source": "combined", "destination": "output",
+        "run_if": ["passed"]}}
+    return _pipeline(APPROVAL_GROUP, APPROVAL,
+                     [_dependency(NOTES, NOTES_STAGE), _git_material()],
+                     # manual first stage: runs only when an approver clicks Approve
                      [_stage("approval", "manual",
-                             [_job("publish-confluence", fetches + [_exec("publish")])],
+                             [_job("publish-confluence", [fetch, _exec("publish")])],
                              access=approval_access())],
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release")])
@@ -228,11 +248,13 @@ class GoCD:
         self.upsert(connect_config(release))
         for c in catalog:
             self.upsert(space_config(c))
-        # approval waits only for spaces that build the release; a cancelled (skipped) space
-        # must not feed it, or GoCD would fall back to that space's last passed (stale) run
+        # the combined notes wait only for spaces that build the release; a cancelled (skipped)
+        # space must not feed them, or GoCD would fall back to its last passed (stale) run
         building = [c["workspace"] for c in catalog if c.get("current_release")]
-        self.upsert(approval_config(building, release))   # rewire fan-in before deleting old spaces
-        self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
+        self.upsert(notes_config(building, release))      # rewire fan-in before deleting spaces
+        self.upsert(approval_config(release))
+        self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
+                           + [NOTES, APPROVAL])
 
         wanted = {space_pipeline(s) for s in spaces}
         stale = [p for p in self.pipeline_names()
@@ -241,7 +263,7 @@ class GoCD:
             self.delete(name)
         skipped = [c["workspace"] for c in catalog if not c.get("current_release")]
         print(f"[gocd] {len(spaces)} space pipelines; building: {', '.join(building) or 'none'}; "
-              f"will cancel (skip): {', '.join(skipped) or 'none'} -> {APPROVAL}")
+              f"will cancel (skip): {', '.join(skipped) or 'none'} -> {NOTES} -> {APPROVAL}")
 
     def cancel_own_stage(self) -> bool:
         """Cancel the stage this job runs in (GoCD shows it as Cancelled). False if not in GoCD."""
