@@ -1,0 +1,47 @@
+# GoCD users and access, as code. Apply with:
+#     .venv/bin/python gocd/auth/setup_auth.py
+# This file is the source of truth: users/roles removed here are disabled/removed in GoCD.
+# NO PASSWORDS HERE (public repo). Each user's password is in .env as GOCD_PASSWORD_<LOGIN>
+# (login upper-cased, non-alphanumerics -> _); missing ones are generated into .env.
+
+# Users shown under Admin > Users (http://localhost:8153/go/admin/users)
+users:
+  - login: karthikeya
+    email: bommidi.karthikeya.chinna@gmail.com
+    enabled: true
+  - login: gocd-bot              # service account used by pipelines + scripts
+    email: ""
+    enabled: true
+
+# Account the pipelines use for GoCD API calls (must be a user above and a system admin).
+# Its password also goes to .env as GOCD_USER / GOCD_PASSWORD and, encrypted, to GoCD.
+service_account: gocd-bot
+
+# Admin > Security > System Administrators
+system_admins:
+  users: [karthikeya, gocd-bot]
+  roles: []
+
+# Admin > Security > Roles (GoCD roles)
+roles:
+  release-approvers: [karthikeya]     # may approve jira-approvals (publish to Confluence)
+  jira-developers: [karthikeya]       # may see and run the Jira pipelines
+
+# Admin > Pipelines > group permissions. Omit a group to leave it open to every user.
+groups:
+  jira:
+    view:    {roles: [jira-developers]}
+    operate: {roles: [jira-developers]}
+    admins:  {users: [karthikeya]}
+  jira-spaces:
+    view:    {roles: [jira-developers]}
+    operate: {roles: [jira-developers]}
+    admins:  {users: [karthikeya]}
+  jira-approval:
+    view:    {roles: [jira-developers, release-approvers]}
+    operate: {roles: [release-approvers]}
+    admins:  {users: [karthikeya]}
+
+# Who may approve the manual approval stage of jira-approvals
+approval:
+  roles: [release-approvers]

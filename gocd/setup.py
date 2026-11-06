@@ -26,8 +26,8 @@ REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_confi
 ENV_NAME = "jira-release"
 SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY", "GOCD_PASSWORD"}
 SKIP = {"WORKSPACE",  # set per space pipeline
-        # login accounts: kept in .env only (gocd/auth/setup_auth.py manages them)
-        "GOCD_ADMIN_USER", "GOCD_ADMIN_PASSWORD", "GOCD_APPROVERS", "GOCD_USERS"}
+        # user passwords (GOCD_PASSWORD_<LOGIN>) stay in .env; gocd/access.yaml + setup_auth.py
+        }
 # RELEASE (e.g. release-26.14), if present in .env, is written to the jira-release environment.
 # It can also be edited directly in GoCD: Admin > Environments > jira-release.
 

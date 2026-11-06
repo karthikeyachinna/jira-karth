@@ -15,6 +15,7 @@ run re-syncs them, then GoCD triggers each space pipeline, and the approval pipe
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import requests
 
@@ -34,7 +35,17 @@ ENVIRONMENT = "jira-release"
 REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
 
 NO_AUTH = {"roles": [], "users": []}
-APPROVER_ROLE = "release-approvers"   # created by gocd/auth/setup_auth.py
+ACCESS_FILE = Path(__file__).resolve().parent.parent / "gocd" / "access.yaml"
+
+
+def approval_roles() -> list[str] | None:
+    """Roles allowed to approve jira-approvals, from gocd/access.yaml - only once login is on
+    (GOCD_USER set), because GoCD rejects stage permissions for roles that do not exist."""
+    if not os.environ.get("GOCD_USER") or not ACCESS_FILE.is_file():
+        return None
+    import yaml
+    cfg = yaml.safe_load(ACCESS_FILE.read_text()) or {}
+    return list(cfg.get("approval", {}).get("roles", [])) or None
 
 
 def space_pipeline(space: str) -> str:
@@ -138,7 +149,7 @@ def approval_config(spaces: list[str], release_label: str = "") -> dict:
                      # manual first stage: runs only when someone clicks Approve
                      [_stage("approval", "manual",
                              [_job("publish-confluence", fetches + [_exec("publish")])],
-                             roles=[APPROVER_ROLE] if os.environ.get("GOCD_USER") else None)],
+                             roles=approval_roles())],
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release")])
 
