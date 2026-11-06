@@ -106,15 +106,22 @@ def space_config(space: dict) -> dict:
     env = [
         _var("WORKSPACE", key),
         _var("RELEASE", current),                                   # what this run builds
-        _var("RELEASE_LABEL", space.get("label") or current or "no-release"),  # run label
         _var("EXISTING_RELEASES", ",".join(space.get("released", [])) or "none"),
         _var("UPCOMING_RELEASES", ",".join(space.get("upcoming", [])) or "none"),
     ]
-    # run label in the GoCD UI, e.g. "release-26.1-7"
+    if current:
+        # run label in the GoCD UI, e.g. "release-26.1-7"
+        env.append(_var("RELEASE_LABEL", current))
+        label = "${env:RELEASE_LABEL}-${COUNT}"
+    else:
+        # release not in this space: plain run number (empty release tag), job cancels itself
+        target = space.get("target_release") or ""
+        env.append(_var("SKIP_REASON", f"release {target} is not a fixVersion in {key}" if target
+                        else f"{key} has no unreleased version"))
+        label = "${COUNT}"
     return _pipeline(SPACES_GROUP, space_pipeline(key),
                      [_dependency(UPSTREAM, UPSTREAM_STAGE), _git_material()],
-                     [_stage(SPACE_STAGE, "success", [job])],
-                     label="${env:RELEASE_LABEL}-${COUNT}", env=env)
+                     [_stage(SPACE_STAGE, "success", [job])], label=label, env=env)
 
 
 def approval_config(spaces: list[str], release_label: str = "") -> dict:
@@ -204,7 +211,11 @@ class GoCD:
         self.upsert(connect_config(self.connect_release()))
         for c in catalog:
             self.upsert(space_config(c))
-        self.upsert(approval_config(spaces, catalog[0].get("target_release", "") if catalog else ""))     # rewire fan-in before deleting old spaces
+        # approval waits only for spaces that build the release; a cancelled (skipped) space
+        # must not feed it, or GoCD would fall back to that space's last passed (stale) run
+        building = [c["workspace"] for c in catalog if c.get("current_release")]
+        release = catalog[0].get("target_release", "") if catalog else ""
+        self.upsert(approval_config(building, release))   # rewire fan-in before deleting old spaces
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
 
         wanted = {space_pipeline(s) for s in spaces}
@@ -212,4 +223,16 @@ class GoCD:
                  if (p.startswith(SPACE_PREFIX) and p not in wanted) or p in LEGACY]
         for name in stale:
             self.delete(name)
-        print(f"[gocd] {len(spaces)} space pipelines -> {APPROVAL}")
+        skipped = [c["workspace"] for c in catalog if not c.get("current_release")]
+        print(f"[gocd] {len(spaces)} space pipelines; building: {', '.join(building) or 'none'}; "
+              f"will cancel (skip): {', '.join(skipped) or 'none'} -> {APPROVAL}")
+
+    def cancel_own_stage(self) -> bool:
+        """Cancel the stage this job runs in (GoCD shows it as Cancelled). False if not in GoCD."""
+        keys = ("GO_PIPELINE_NAME", "GO_PIPELINE_COUNTER", "GO_STAGE_NAME", "GO_STAGE_COUNTER")
+        if not all(os.environ.get(k) for k in keys):
+            return False
+        name, counter, stage, stage_counter = (os.environ[k] for k in keys)
+        r = self.call("POST", f"/stages/{name}/{counter}/{stage}/{stage_counter}/cancel", 3,
+                      headers={"X-GoCD-Confirm": "true"})
+        return r.status_code == 200

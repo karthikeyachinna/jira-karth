@@ -109,6 +109,18 @@ def _status_page(out_dir, message: str) -> None:
     print(message)
 
 
+def _skip(out_dir, message: str) -> None:
+    """Release not in this space: write the status page, then cancel this GoCD stage so the
+    run shows GoCD's cancelled (skip) sign instead of a green tick."""
+    import time
+    from .gocd import GoCD
+
+    _status_page(out_dir, message)
+    if GoCD().cancel_own_stage():
+        print("[gocd] cancelled this stage (skip)", flush=True)
+        time.sleep(60)          # GoCD stops the job; this only waits for that to happen
+
+
 def cmd_generate(settings: Settings) -> None:
     from . import ai, render
 
@@ -117,16 +129,20 @@ def cmd_generate(settings: Settings) -> None:
     out = OUTPUT_DIR / settings.workspace
     out.mkdir(parents=True, exist_ok=True)
 
+    skip = os.environ.get("SKIP_REASON", "")
+    if skip:
+        return _skip(out, f"{settings.workspace}: {skip} - skipped.")
+
     jira = JiraClient(settings)
     if settings.release:
         version = jira.find_version(settings.workspace, settings.release)
         if not version:
-            return _status_page(out, f"{settings.workspace}: release {settings.release} is not a "
-                                     "fixVersion in this space - skipped.")
+            return _skip(out, f"{settings.workspace}: release {settings.release} is not a "
+                              "fixVersion in this space - skipped.")
     else:
         version = pick_release(jira.versions(settings.workspace, status="unreleased"))
         if not version:
-            return _status_page(out, f"{settings.workspace}: no unreleased release - skipped.")
+            return _skip(out, f"{settings.workspace}: no unreleased release - skipped.")
     release = version["name"]
 
     issues = jira.release_issues(settings.workspace, release)
