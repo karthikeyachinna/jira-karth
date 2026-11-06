@@ -60,8 +60,14 @@ def cmd_discover(settings: Settings) -> None:
 def cmd_generate(settings: Settings) -> None:
     from . import ai, render
 
+    OUTPUT_DIR.mkdir(exist_ok=True)
     if not settings.workspace or not settings.release:
-        print("WORKSPACE / RELEASE not set - discovery-only run, nothing to generate.")
+        msg = ("WORKSPACE / RELEASE not set - discovery-only run, nothing to generate.\n"
+               "Use 'Trigger with options' and set WORKSPACE and RELEASE.")
+        print(msg)
+        # GoCD fails the job if the artifact rule matches nothing, so always leave a file behind
+        (OUTPUT_DIR / "release_notes.html").write_text(
+            f"<!doctype html><html><body><p>{msg.replace(chr(10), '<br/>')}</p></body></html>")
         return
 
     jira = JiraClient(settings)
