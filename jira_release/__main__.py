@@ -2,9 +2,9 @@
 
     python -m jira_release check      # verify Jira credentials
     python -m jira_release discover   # list spaces and the release each one will build
-    python -m jira_release sync       # jira-connect job: discover + rewrite the fan-out pipeline
-    python -m jira_release generate   # space-<KEY> job: release notes for $WORKSPACE [$RELEASE]
-    python -m jira_release publish    # approval job: publish every generated space to Confluence
+    python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
+    python -m jira_release generate   # jira-space-<KEY> pipeline: release notes for $WORKSPACE [$RELEASE]
+    python -m jira_release publish    # jira-release-approval pipeline: publish every generated space to Confluence
 """
 from __future__ import annotations
 
@@ -57,7 +57,7 @@ def cmd_sync(settings: Settings) -> None:
     catalog = cmd_discover(settings)
     if not catalog:
         raise SystemExit("No Jira spaces found - nothing to fan out")
-    GoCD().sync_spaces_pipeline([c["workspace"] for c in catalog])
+    GoCD().sync([c["workspace"] for c in catalog])
 
 
 def _status_page(out_dir, message: str) -> None:

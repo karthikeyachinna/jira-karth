@@ -1,13 +1,14 @@
-"""Create/update the fan-out pipeline in GoCD: one parallel job per Jira space, then Approval.
+"""Create/update the fan-out pipelines in GoCD: one pipeline per Jira space, then one Approval.
 
-    jira-connect (config repo)                 jira-release-spaces (written by this module)
-    ┌──────────────┐        ┌───────────────────────────────┐   ┌─────────────────────────┐
-    │ connect-jira │ ─────▶ │ stage spaces: space-DEV        │──▶│ stage approval (manual) │
-    └──────────────┘        │               space-SCRUM  ... │   │   publish-confluence    │
-                            └───────────────────────────────┘   └─────────────────────────┘
+                      ┌─▶ jira-space-DEV   ─┐
+                      ├─▶ jira-space-QS    ─┤
+    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-release-approval (manual)
+    (config repo)     ├─▶ jira-space-SCRUM ─┤
+                      └─▶ jira-space-SUP   ─┘
 
-GoCD jobs are static per pipeline run, so the Jira job rewrites the *downstream* pipeline
-before it finishes; the downstream run it triggers then has exactly one job per space.
+The number of space pipelines depends on Jira, so the connect-jira job writes them through the
+GoCD API before it finishes; GoCD then triggers each space pipeline from jira-connect, and the
+approval pipeline waits (fan-in) for all of them and a manual click.
 """
 from __future__ import annotations
 
@@ -17,67 +18,80 @@ import requests
 
 UPSTREAM = "jira-connect"
 UPSTREAM_STAGE = "connect-jira"
-PIPELINE = "jira-release-spaces"
+SPACE_PREFIX = "jira-space-"
+SPACE_STAGE = "release-notes"
+SPACE_JOB = "generate"
+APPROVAL = "jira-release-approval"
+LEGACY = ["jira-release-spaces"]          # earlier single-pipeline layout, removed on sync
 GROUP = "jira"
 ENVIRONMENT = "jira-release"
 REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
 
-
-def job_name(space: str) -> str:
-    return f"space-{space}"
+NO_AUTH = {"roles": [], "users": []}
 
 
-def pipeline_config(spaces: list[str]) -> dict:
-    exec_task = lambda *args: {"type": "exec", "attributes": {
+def space_pipeline(space: str) -> str:
+    return f"{SPACE_PREFIX}{space}"
+
+
+def _git_material() -> dict:
+    # code only - commits must not trigger these pipelines (jira-connect does)
+    return {"type": "git", "attributes": {
+        "name": "repo", "url": REPO_URL, "branch": "main", "auto_update": True,
+        "shallow_clone": True, "filter": {"ignore": ["**/*", "*"]}, "invert_filter": False}}
+
+
+def _dependency(pipeline: str, stage: str) -> dict:
+    return {"type": "dependency", "attributes": {
+        "name": pipeline, "pipeline": pipeline, "stage": stage,
+        "auto_update": True, "ignore_for_scheduling": False}}
+
+
+def _exec(*args: str) -> dict:
+    return {"type": "exec", "attributes": {
         "command": "gocd/run.sh", "arguments": list(args), "run_if": ["passed"]}}
 
-    space_jobs = [{
-        "name": job_name(s),
-        "timeout": 30,
-        "environment_variables": [{"name": "WORKSPACE", "value": s, "secure": False}],
-        "resources": [], "tabs": [{"name": "release-notes", "path": f"{s}/release_notes.html"}],
-        "artifacts": [{"type": "build", "source": f"output/{s}", "destination": ""}],
-        "tasks": [exec_task("generate")],
-    } for s in spaces]
 
-    fetch_tasks = [{"type": "fetch", "attributes": {
-        "artifact_origin": "gocd", "pipeline": "", "stage": "spaces", "job": job_name(s),
-        "is_source_a_file": False, "source": s, "destination": "output", "run_if": ["passed"],
-    }} for s in spaces]
+def _stage(name: str, approval: str, jobs: list[dict]) -> dict:
+    return {"name": name, "fetch_materials": True, "clean_working_directory": True,
+            "never_cleanup_artifacts": False, "environment_variables": [],
+            "approval": {"type": approval, "allow_only_on_success": True,
+                         "authorization": NO_AUTH},
+            "jobs": jobs}
 
-    return {
-        "group": GROUP,
-        "pipeline": {
-            "name": PIPELINE,
-            "label_template": "${COUNT}",
-            "lock_behavior": "unlockWhenFinished",
-            "materials": [
-                {"type": "dependency", "attributes": {
-                    "name": UPSTREAM, "pipeline": UPSTREAM, "stage": UPSTREAM_STAGE,
-                    "auto_update": True, "ignore_for_scheduling": False}},
-                # code only - commits must not trigger this pipeline (jira-connect does)
-                {"type": "git", "attributes": {
-                    "name": "repo", "url": REPO_URL, "branch": "main", "auto_update": True,
-                    "shallow_clone": True, "filter": {"ignore": ["**/*", "*"]},
-                    "invert_filter": False}},
-            ],
-            "stages": [
-                {"name": "spaces", "fetch_materials": True, "clean_working_directory": True,
-                 "never_cleanup_artifacts": False,
-                 "approval": {"type": "success", "allow_only_on_success": True,
-                              "authorization": {"roles": [], "users": []}},
-                 "environment_variables": [], "jobs": space_jobs},
-                {"name": "approval", "fetch_materials": True, "clean_working_directory": True,
-                 "never_cleanup_artifacts": False,
-                 "approval": {"type": "manual", "allow_only_on_success": True,
-                              "authorization": {"roles": [], "users": []}},
-                 "environment_variables": [],
-                 "jobs": [{"name": "publish-confluence", "timeout": 30, "resources": [],
-                           "environment_variables": [], "tabs": [], "artifacts": [],
-                           "tasks": fetch_tasks + [exec_task("publish")]}]},
-            ],
-        },
-    }
+
+def _job(name: str, tasks: list[dict], **extra) -> dict:
+    return {"name": name, "timeout": 30, "resources": [], "environment_variables": [],
+            "tabs": [], "artifacts": [], "tasks": tasks, **extra}
+
+
+def _pipeline(name: str, materials: list[dict], stages: list[dict]) -> dict:
+    return {"group": GROUP, "pipeline": {
+        "name": name, "label_template": "${COUNT}", "lock_behavior": "unlockWhenFinished",
+        "materials": materials, "stages": stages}}
+
+
+def space_config(space: str) -> dict:
+    job = _job(SPACE_JOB, [_exec("generate")],
+               environment_variables=[{"name": "WORKSPACE", "value": space, "secure": False}],
+               tabs=[{"name": "release-notes", "path": f"{space}/release_notes.html"}],
+               artifacts=[{"type": "build", "source": f"output/{space}", "destination": ""}])
+    return _pipeline(space_pipeline(space),
+                     [_dependency(UPSTREAM, UPSTREAM_STAGE), _git_material()],
+                     [_stage(SPACE_STAGE, "success", [job])])
+
+
+def approval_config(spaces: list[str]) -> dict:
+    fetches = [{"type": "fetch", "attributes": {
+        "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
+        "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
+        "run_if": ["passed"]}} for s in spaces]
+    return _pipeline(APPROVAL,
+                     [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
+                     + [_git_material()],
+                     # manual first stage: runs only when someone clicks Approve
+                     [_stage("approval", "manual",
+                             [_job("publish-confluence", fetches + [_exec("publish")])])])
 
 
 class GoCD:
@@ -95,22 +109,53 @@ class GoCD:
             raise SystemExit(f"GoCD {method} {path} -> {r.status_code}: {r.text[:500]}")
         return r
 
-    def sync_spaces_pipeline(self, spaces: list[str]) -> None:
-        body = pipeline_config(spaces)
-        existing = self.call("GET", f"/admin/pipelines/{PIPELINE}", 11)
+    # ---- pipelines --------------------------------------------------------
+    def upsert(self, body: dict) -> None:
+        name = body["pipeline"]["name"]
+        existing = self.call("GET", f"/admin/pipelines/{name}", 11)
         if existing.status_code == 404:
             self.call("POST", "/admin/pipelines", 11, json=body)
-            self.call("POST", f"/pipelines/{PIPELINE}/unpause", 1,
-                      headers={"X-GoCD-Confirm": "true"})
-            print(f"[gocd] created pipeline {PIPELINE} with {len(spaces)} parallel jobs")
+            self.call("POST", f"/pipelines/{name}/unpause", 1, headers={"X-GoCD-Confirm": "true"})
+            print(f"[gocd] created  {name}")
         else:
-            self.call("PUT", f"/admin/pipelines/{PIPELINE}", 11, json=body["pipeline"],
+            self.call("PUT", f"/admin/pipelines/{name}", 11, json=body["pipeline"],
                       headers={"If-Match": existing.headers["ETag"]})
-            print(f"[gocd] updated pipeline {PIPELINE}: jobs = "
-                  + ", ".join(job_name(s) for s in spaces))
+            print(f"[gocd] updated  {name}")
 
+    def delete(self, name: str) -> None:
+        if self.call("GET", f"/admin/pipelines/{name}", 11).status_code == 404:
+            return
+        self.env_pipelines(remove=[name])
+        self.call("DELETE", f"/admin/pipelines/{name}", 11)
+        print(f"[gocd] deleted  {name}")
+
+    def pipeline_names(self) -> list[str]:
+        groups = self.call("GET", "/admin/pipeline_groups", 1).json()
+        return [p["name"] for g in groups["_embedded"]["groups"] if g["name"] == GROUP
+                for p in g.get("pipelines", [])]
+
+    # ---- environment ------------------------------------------------------
+    def env_pipelines(self, add: list[str] = (), remove: list[str] = ()) -> None:
         env = self.call("GET", f"/admin/environments/{ENVIRONMENT}", 3)
-        if env.status_code == 200 and PIPELINE not in {p["name"] for p in env.json().get("pipelines", [])}:
+        if env.status_code != 200:
+            return
+        current = {p["name"] for p in env.json().get("pipelines", [])}
+        add = [p for p in add if p not in current]
+        remove = [p for p in remove if p in current]
+        if add or remove:
             self.call("PATCH", f"/admin/environments/{ENVIRONMENT}", 3,
-                      json={"pipelines": {"add": [PIPELINE], "remove": []}})
-            print(f"[gocd] added {PIPELINE} to environment {ENVIRONMENT}")
+                      json={"pipelines": {"add": add, "remove": remove}})
+
+    # ---- main entry -------------------------------------------------------
+    def sync(self, spaces: list[str]) -> None:
+        for s in spaces:
+            self.upsert(space_config(s))
+        self.upsert(approval_config(spaces))     # rewire fan-in before deleting old spaces
+        self.env_pipelines(add=[space_pipeline(s) for s in spaces] + [APPROVAL])
+
+        wanted = {space_pipeline(s) for s in spaces}
+        stale = [p for p in self.pipeline_names()
+                 if (p.startswith(SPACE_PREFIX) and p not in wanted) or p in LEGACY]
+        for name in stale:
+            self.delete(name)
+        print(f"[gocd] {len(spaces)} space pipelines -> {APPROVAL}")
