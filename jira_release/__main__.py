@@ -4,7 +4,7 @@
     python -m jira_release discover   # list spaces and the release each one will build
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
     python -m jira_release generate   # jira-space-<KEY> pipeline: release notes for $WORKSPACE [$RELEASE]
-    python -m jira_release publish    # jira-release-approval pipeline: publish every generated space to Confluence
+    python -m jira_release publish    # jira-approvals pipeline: publish every generated space to Confluence
 """
 from __future__ import annotations
 
