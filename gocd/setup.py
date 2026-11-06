@@ -24,7 +24,7 @@ AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get(
 REPO_ID = "jira-karth"
 REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
 ENV_NAME = "jira-release"
-PIPELINE = "jira-release-notes"
+PIPELINE = "jira-connect"
 SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY"}
 SKIP = {"WORKSPACE", "RELEASE"}  # chosen per run via "Trigger with options"
 
@@ -95,11 +95,22 @@ def main() -> None:
 
     # 2. environment with variables (secure ones encrypted by GoCD)
     variables = [{"name": k, "value": v, "secure": k in SECURE} for k, v in sorted(values.items())]
-    upsert(f"/admin/environments/{ENV_NAME}", 3, {
-        "name": ENV_NAME,
-        "pipelines": [],  # the pipeline joins via the environments: block in the YAML
-        "environment_variables": variables,
-    })
+    env_path = f"/admin/environments/{ENV_NAME}"
+    current = api("GET", env_path, 3)
+    if current.status_code == 404:
+        api("POST", "/admin/environments", 3, json={
+            "name": ENV_NAME, "pipelines": [], "environment_variables": variables})
+        print(f"created {env_path}")
+    else:
+        # The environment is partly defined by the YAML (config repo), so GoCD rejects a full
+        # PUT; PATCH only the variables: drop the ones we manage, then add the fresh values.
+        names = {v["name"] for v in variables}
+        stale = [v["name"] for v in current.json().get("environment_variables", [])
+                 if v["name"] in names]
+        if stale:
+            api("PATCH", env_path, 3, json={"environment_variables": {"add": [], "remove": stale}})
+        api("PATCH", env_path, 3, json={"environment_variables": {"add": variables, "remove": []}})
+        print(f"updated {env_path}")
     print("  variables: " + ", ".join(f"{v['name']}{' (secure)' if v['secure'] else ''}"
                                       for v in variables))
 
