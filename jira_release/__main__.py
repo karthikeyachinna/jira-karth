@@ -203,27 +203,37 @@ def cmd_combine(settings: Settings) -> None:
     release = version["name"]
     issues = [i for s in spaces for i in s["issues"]]
     names = ", ".join(s["workspace"] for s in spaces)
-    print(f"[combine] {release}: {len(issues)} tickets from {names}")
+    region = release_region()
+    print(f"[combine] {release} ({region} layout): {len(issues)} tickets from {names}")
 
-    content = ai.write_content(settings, names, version, issues)
+    content = ai.write_content(settings, region, names, version, issues)
     kept = sum(len(t["issue_keys"]) for t in content["headline_themes"])
     print(f"[ai] {kept} tickets in {len(content['headline_themes'])} themes, "
           f"{len(content.get('excluded', []))} filtered out")
 
-    title = f"{release} — Release Notes"
+    title = render.title_for(region, release)
     existing = [r for r in os.environ.get("EXISTING_RELEASES", "").split(",") if r and r != "none"]
-    body = render.build_body(names, version, issues, content, settings.ready_statuses,
+    body = render.build_body(region, names, version, issues, content, settings.ready_statuses,
                              existing_releases=existing)
     (out / "content.json").write_text(json.dumps(
         {"version": version, "issues": issues, "content": content}, indent=2))
     (out / "body.xhtml").write_text(body)
     html_path = out / "release_notes.html"           # fixed name -> GoCD custom tab
     html_path.write_text(render.build_page(title, body))
-    pdf_path = out / f"{re.sub(r'[^A-Za-z0-9._-]+', '-', release)}_release-notes.pdf"
+    pdf_path = out / f"{re.sub(r'[^A-Za-z0-9._-]+', '-', title).strip('-')}.pdf"
     has_pdf = render.html_to_pdf(html_path, pdf_path)
     (out / "meta.json").write_text(json.dumps(
-        {"title": title, "pdf": pdf_path.name if has_pdf else None}))
+        {"title": title, "region": region, "pdf": pdf_path.name if has_pdf else None}))
     print(f"[done] {title} -> {out}")
+
+
+def release_region() -> str:
+    """RELEASE_REGION on the GoCD environment: US (default) or INT (International)."""
+    raw = os.environ.get("RELEASE_REGION", "US").strip().upper()
+    region = "INT" if raw.startswith("INT") else "US"
+    if raw not in ("US", "INT", "INTERNATIONAL", ""):
+        print(f"[combine] RELEASE_REGION={raw!r} not recognised - using {region}")
+    return region
 
 
 def cmd_publish(settings: Settings) -> None:
