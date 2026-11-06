@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from html import escape
@@ -33,20 +34,38 @@ def cmd_discover(settings: Settings) -> list[dict]:
 
     catalog = []
     for p in sorted(projects, key=lambda p: p["key"]):
-        versions = jira.versions(p["key"], status="unreleased")
-        nxt = pick_release(versions)
-        catalog.append({"workspace": p["key"], "name": p["name"],
-                        "next_release": nxt["name"] if nxt else None,
-                        "releases": [v["name"] for v in versions]})
+        versions = jira.versions(p["key"])                     # released + unreleased
+        unreleased = [v for v in versions if not v.get("released") and not v.get("archived")]
+        released = sorted((v for v in versions if v.get("released")),
+                          key=lambda v: v.get("releaseDate") or "", reverse=True)
+        current = pick_release(unreleased)
+        catalog.append({
+            "workspace": p["key"], "name": p["name"],
+            "current_release": current["name"] if current else None,
+            "upcoming": [v["name"] for v in unreleased if v is not current],
+            "released": [v["name"] for v in released],
+        })
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     (OUTPUT_DIR / "workspaces.json").write_text(json.dumps(catalog, indent=2))
-    lines = ["| Space | Name | Release to build | All unreleased |", "|---|---|---|---|"]
+    lines = ["| Space | Name | Current release (building) | Upcoming | Existing (released) |",
+             "|---|---|---|---|---|"]
     for c in catalog:
-        lines.append(f"| {c['workspace']} | {c['name']} | {c['next_release'] or '—'} | "
-                     f"{', '.join(c['releases']) or '—'} |")
+        lines.append(f"| {c['workspace']} | {c['name']} | {c['current_release'] or '—'} | "
+                     f"{', '.join(c['upcoming']) or '—'} | {', '.join(c['released']) or '—'} |")
     table = "\n".join(lines)
     (OUTPUT_DIR / "workspaces.md").write_text(table + "\n")
+    from .render import CSS
+    rows = "".join(
+        f"<tr><td><b>{escape(c['workspace'])}</b></td><td>{escape(c['name'])}</td>"
+        f"<td><b>{escape(c['current_release'] or '—')}</b></td>"
+        f"<td>{escape(', '.join(c['upcoming']) or '—')}</td>"
+        f"<td>{escape(', '.join(c['released']) or '—')}</td></tr>" for c in catalog)
+    (OUTPUT_DIR / "workspaces.html").write_text(
+        f"<!doctype html><html><head><meta charset='utf-8'><style>{CSS}</style></head><body>"
+        "<h2>Jira spaces and releases</h2><table><thead><tr><th>Space</th><th>Name</th>"
+        "<th>Current release (building)</th><th>Upcoming</th><th>Existing (released)</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table></body></html>")
     print(table)
     return catalog
 
@@ -57,7 +76,7 @@ def cmd_sync(settings: Settings) -> None:
     catalog = cmd_discover(settings)
     if not catalog:
         raise SystemExit("No Jira spaces found - nothing to fan out")
-    GoCD().sync([c["workspace"] for c in catalog])
+    GoCD().sync(catalog)
 
 
 def _status_page(out_dir, message: str) -> None:
@@ -95,7 +114,9 @@ def cmd_generate(settings: Settings) -> None:
     content = ai.write_content(settings, settings.workspace, version, issues)
 
     title = f"Release Notes - {settings.workspace} {release}"
-    body = render.build_body(settings.workspace, version, issues, content, settings.ready_statuses)
+    existing = [r for r in os.environ.get("EXISTING_RELEASES", "").split(",") if r and r != "none"]
+    body = render.build_body(settings.workspace, version, issues, content, settings.ready_statuses,
+                             existing_releases=existing)
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{settings.workspace}-{release}")
 
     (out / "content.json").write_text(json.dumps(

@@ -71,15 +71,20 @@ def _job(name: str, tasks: list[dict], **extra) -> dict:
             "tabs": [], "artifacts": [], "tasks": tasks, **extra}
 
 
-def _pipeline(group: str, name: str, materials: list[dict], stages: list[dict]) -> dict:
+def _pipeline(group: str, name: str, materials: list[dict], stages: list[dict],
+              label: str = "${COUNT}", env: list[dict] | None = None) -> dict:
     return {"group": group, "pipeline": {
-        "name": name, "label_template": "${COUNT}", "lock_behavior": "unlockWhenFinished",
-        "materials": materials, "stages": stages}}
+        "name": name, "label_template": label, "lock_behavior": "unlockWhenFinished",
+        "environment_variables": env or [], "materials": materials, "stages": stages}}
+
+
+def _var(name: str, value: str) -> dict:
+    return {"name": name, "value": value, "secure": False}
 
 
 def connect_config() -> dict:
     job = _job(UPSTREAM_STAGE, [_exec("check"), _exec("sync")],
-               tabs=[{"name": "spaces", "path": "spaces/workspaces.md"}],
+               tabs=[{"name": "spaces", "path": "spaces/workspaces.html"}],
                artifacts=[{"type": "build", "source": "output/workspaces.*",
                            "destination": "spaces"}])
     repo = _git_material()
@@ -88,14 +93,25 @@ def connect_config() -> dict:
     return _pipeline(CONNECT_GROUP, UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])])
 
 
-def space_config(space: str) -> dict:
+def space_config(space: dict) -> dict:
+    """space = one entry of the discover catalog: workspace, current_release, released, ..."""
+    key = space["workspace"]
+    current = space.get("current_release") or ""
     job = _job(SPACE_JOB, [_exec("generate")],
-               environment_variables=[{"name": "WORKSPACE", "value": space, "secure": False}],
-               tabs=[{"name": "release-notes", "path": f"{space}/release_notes.html"}],
-               artifacts=[{"type": "build", "source": f"output/{space}", "destination": ""}])
-    return _pipeline(SPACES_GROUP, space_pipeline(space),
+               tabs=[{"name": "release-notes", "path": f"{key}/release_notes.html"}],
+               artifacts=[{"type": "build", "source": f"output/{key}", "destination": ""}])
+    env = [
+        _var("WORKSPACE", key),
+        _var("RELEASE", current),                                   # what this run builds
+        _var("RELEASE_LABEL", current or "no-release"),             # shown as the run label
+        _var("EXISTING_RELEASES", ",".join(space.get("released", [])) or "none"),
+        _var("UPCOMING_RELEASES", ",".join(space.get("upcoming", [])) or "none"),
+    ]
+    # run label in the GoCD UI, e.g. "release-26.1-7"
+    return _pipeline(SPACES_GROUP, space_pipeline(key),
                      [_dependency(UPSTREAM, UPSTREAM_STAGE), _git_material()],
-                     [_stage(SPACE_STAGE, "success", [job])])
+                     [_stage(SPACE_STAGE, "success", [job])],
+                     label="${env:RELEASE_LABEL}-${COUNT}", env=env)
 
 
 def approval_config(spaces: list[str]) -> dict:
@@ -165,10 +181,11 @@ class GoCD:
                       json={"pipelines": {"add": add, "remove": remove}})
 
     # ---- main entry -------------------------------------------------------
-    def sync(self, spaces: list[str]) -> None:
+    def sync(self, catalog: list[dict]) -> None:
+        spaces = [c["workspace"] for c in catalog]
         self.upsert(connect_config())
-        for s in spaces:
-            self.upsert(space_config(s))
+        for c in catalog:
+            self.upsert(space_config(c))
         self.upsert(approval_config(spaces))     # rewire fan-in before deleting old spaces
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
 

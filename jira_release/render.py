@@ -30,7 +30,7 @@ def _ul(items: list[str]) -> str:
 
 
 def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
-               ready_statuses: list[str]) -> str:
+               ready_statuses: list[str], existing_releases: list[str] | None = None) -> str:
     """XHTML fragment. Valid Confluence storage format, also used inside the PDF page."""
     by_key = {i["key"]: i for i in issues}
     name = version.get("name", "")
@@ -88,6 +88,10 @@ def build_body(workspace: str, version: dict, issues: list[dict], content: dict,
         "<p>" + escape(", ".join(f"{s}: {n}" for s, n in status_counts.most_common())) + "</p>",
         _ul(content["readiness_warnings"]),
         "<h2>Post-Deployment Activities</h2>", _ul(content["post_deployment"]),
+        "<h2>Release History</h2>",
+        f"<p><strong>Current:</strong> {escape(name)}</p>",
+        "<p><strong>Existing releases:</strong> "
+        + (escape(", ".join(existing_releases)) if existing_releases else "none yet") + "</p>",
     ]
     return "\n".join(out)
 
