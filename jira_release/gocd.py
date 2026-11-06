@@ -38,14 +38,19 @@ NO_AUTH = {"roles": [], "users": []}
 ACCESS_FILE = Path(__file__).resolve().parent.parent / "gocd" / "access.yaml"
 
 
-def approval_roles() -> list[str] | None:
-    """Roles allowed to approve jira-approvals, from gocd/access.yaml - only once login is on
-    (GOCD_USER set), because GoCD rejects stage permissions for roles that do not exist."""
+def approval_access() -> dict | None:
+    """Who may approve jira-approvals, from gocd/access.yaml: `approval.emails` (users, matched
+    by the email on their user entry) plus optional `approval.roles`. Applied only once login
+    is on (GOCD_USER set): GoCD rejects stage permissions for unknown users/roles."""
     if not os.environ.get("GOCD_USER") or not ACCESS_FILE.is_file():
         return None
     import yaml
     cfg = yaml.safe_load(ACCESS_FILE.read_text()) or {}
-    return list(cfg.get("approval", {}).get("roles", [])) or None
+    approval = cfg.get("approval") or {}
+    by_email = {(u.get("email") or "").lower(): u["login"] for u in cfg.get("users", [])}
+    users = [by_email[e.lower()] for e in approval.get("emails", []) if e.lower() in by_email]
+    roles = list(approval.get("roles", []))
+    return {"users": users, "roles": roles} if users or roles else None
 
 
 def space_pipeline(space: str) -> str:
@@ -70,11 +75,11 @@ def _exec(*args: str) -> dict:
         "command": "gocd/run.sh", "arguments": list(args), "run_if": ["passed"]}}
 
 
-def _stage(name: str, approval: str, jobs: list[dict], roles: list[str] | None = None) -> dict:
+def _stage(name: str, approval: str, jobs: list[dict], access: dict | None = None) -> dict:
     return {"name": name, "fetch_materials": True, "clean_working_directory": True,
             "never_cleanup_artifacts": False, "environment_variables": [],
             "approval": {"type": approval, "allow_only_on_success": True,
-                         "authorization": {"roles": roles or [], "users": []}},
+                         "authorization": access or NO_AUTH},
             "jobs": jobs}
 
 
@@ -149,7 +154,7 @@ def approval_config(spaces: list[str], release_label: str = "") -> dict:
                      # manual first stage: runs only when someone clicks Approve
                      [_stage("approval", "manual",
                              [_job("publish-confluence", fetches + [_exec("publish")])],
-                             roles=approval_roles())],
+                             access=approval_access())],
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release")])
 

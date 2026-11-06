@@ -39,6 +39,7 @@ CONTAINER_PATH = "/godata/config/passwords.properties"
 AUTH_ID = "file-auth"
 PLUGIN = "cd.go.authentication.passwordfile"
 ENVIRONMENT = "jira-release"
+APPROVAL_GROUP = "jira-approval"
 DRY = "--dry-run" in sys.argv
 
 
@@ -109,6 +110,12 @@ def perms(spec: dict | None) -> dict:
     return {"users": list(spec.get("users", [])), "roles": list(spec.get("roles", []))}
 
 
+def approver_logins(cfg: dict) -> list[str]:
+    by_email = {(u.get("email") or "").lower(): u["login"] for u in cfg.get("users", [])}
+    return [by_email[e.lower()] for e in (cfg.get("approval") or {}).get("emails", [])
+            if e.lower() in by_email]
+
+
 # ---------------------------------------------------------------- validate
 def load_access() -> dict:
     cfg = yaml.safe_load(ACCESS_FILE.read_text()) or {}
@@ -123,7 +130,15 @@ def load_access() -> dict:
     for role, members in roles.items():
         errors += [f"role {role}: unknown user {m!r}" for m in members if m not in logins]
     referenced = list(cfg.get("system_admins", {}).get("roles", []))
-    referenced += cfg.get("approval", {}).get("roles", [])
+    referenced += (cfg.get("approval") or {}).get("roles", [])
+    emails = {(u.get("email") or "").lower(): u for u in cfg.get("users", []) if u.get("email")}
+    for e in (cfg.get("approval") or {}).get("emails", []):
+        if e.lower() not in emails:
+            errors.append(f"approval email {e!r} does not belong to any user in users:")
+        elif not emails[e.lower()].get("enabled", True):
+            errors.append(f"approval email {e!r} belongs to a disabled user")
+    if not (cfg.get("approval") or {}).get("emails") and not (cfg.get("approval") or {}).get("roles"):
+        errors.append("approval: list at least one approver email (or role)")
     for g in (cfg.get("groups") or {}).values():
         for level in ("view", "operate", "admins"):
             referenced += (g or {}).get(level, {}).get("roles", [])
@@ -217,16 +232,22 @@ def main() -> None:
         headers={"If-Match": cur.headers["ETag"]})
     print(f"4. system admins: {', '.join(admins.get('users', []) + admins.get('roles', []))}")
 
-    # 4c. pipeline group permissions
+    # 4c. pipeline group permissions (+ approvers, resolved from their emails)
+    approvers = approver_logins(cfg)
+    print(f"4. approvers (by email): {', '.join(approvers) or '(none)'}")
     for group, spec in (cfg.get("groups") or {}).items():
         cur = api("GET", f"/admin/pipeline_groups/{group}", 1, auth)
         if cur.status_code == 404:
             print(f"4. group {group}: not found yet (run python3 gocd/setup.py, then re-run)")
             continue
         data = cur.json()
+        authz = {k: perms((spec or {}).get(k)) for k in ("view", "operate", "admins")}
+        if group == APPROVAL_GROUP:   # approvers must be able to see and click the stage
+            for level in ("view", "operate"):
+                authz[level]["users"] = sorted(set(authz[level]["users"]) | set(approvers))
         api("PUT", f"/admin/pipeline_groups/{group}", 1, auth, headers={"If-Match": cur.headers["ETag"]},
             json={"name": group, "pipelines": [{"name": p["name"]} for p in data.get("pipelines", [])],
-                  "authorization": {k: perms((spec or {}).get(k)) for k in ("view", "operate", "admins")}})
+                  "authorization": authz})
         print(f"4. group {group}: permissions applied")
 
     # 4d. GoCD roles no longer in the YAML
@@ -258,7 +279,7 @@ def _dry_rest(cfg: dict) -> None:
     print(f"4. system admins: {cfg.get('system_admins')}")
     for g, spec in (cfg.get("groups") or {}).items():
         print(f"4. group {g}: {spec}")
-    print(f"   approval stage roles: {cfg.get('approval', {}).get('roles')}")
+    print(f"   approvers by email -> users: {', '.join(approver_logins(cfg))}")
 
 
 if __name__ == "__main__":

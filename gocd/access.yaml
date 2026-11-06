@@ -12,7 +12,6 @@ users:
   - login: gocd-bot              # service account used by pipelines + scripts
     email: ""
     enabled: true
-
 # Account the pipelines use for GoCD API calls (must be a user above and a system admin).
 # Its password also goes to .env as GOCD_USER / GOCD_PASSWORD and, encrypted, to GoCD.
 service_account: gocd-bot
@@ -42,6 +41,9 @@ groups:
     operate: {roles: [release-approvers]}
     admins:  {users: [karthikeya]}
 
-# Who may approve the manual approval stage of jira-approvals
+# Who may approve the manual approval stage of jira-approvals: listed BY USER EMAIL.
+# Each email must belong to a user above; only these users can click Approve
+# (they are also given view + operate on the jira-approval group automatically).
 approval:
-  roles: [release-approvers]
+  emails:
+    - bommidi.karthikeya.chinna@gmail.com
