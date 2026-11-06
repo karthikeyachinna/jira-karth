@@ -6,9 +6,11 @@
     (config repo)     ├─▶ jira-space-SCRUM ─┤
                       └─▶ jira-space-SUP   ─┘
 
-The number of space pipelines depends on Jira, so the connect-jira job writes them through the
-GoCD API before it finishes; GoCD then triggers each space pipeline from jira-connect, and the
-approval pipeline waits (fan-in) for all of them and a manual click.
+Every pipeline is defined here and written through the GoCD API (not a YAML config repo):
+GoCD does not allow API-defined pipelines to depend on config-repo pipelines, and the number of
+space pipelines depends on Jira. gocd/setup.py creates them once; after that each jira-connect
+run re-syncs them, then GoCD triggers each space pipeline, and the approval pipeline waits
+(fan-in) for all of them and a manual click.
 """
 from __future__ import annotations
 
@@ -69,6 +71,17 @@ def _pipeline(name: str, materials: list[dict], stages: list[dict]) -> dict:
     return {"group": GROUP, "pipeline": {
         "name": name, "label_template": "${COUNT}", "lock_behavior": "unlockWhenFinished",
         "materials": materials, "stages": stages}}
+
+
+def connect_config() -> dict:
+    job = _job(UPSTREAM_STAGE, [_exec("check"), _exec("sync")],
+               tabs=[{"name": "spaces", "path": "spaces/workspaces.md"}],
+               artifacts=[{"type": "build", "source": "output/workspaces.*",
+                           "destination": "spaces"}])
+    repo = _git_material()
+    repo["attributes"]["filter"] = None          # code changes DO trigger jira-connect
+    repo["attributes"]["shallow_clone"] = False
+    return _pipeline(UPSTREAM, [repo], [_stage(UPSTREAM_STAGE, "success", [job])])
 
 
 def space_config(space: str) -> dict:
@@ -149,10 +162,11 @@ class GoCD:
 
     # ---- main entry -------------------------------------------------------
     def sync(self, spaces: list[str]) -> None:
+        self.upsert(connect_config())
         for s in spaces:
             self.upsert(space_config(s))
         self.upsert(approval_config(spaces))     # rewire fan-in before deleting old spaces
-        self.env_pipelines(add=[space_pipeline(s) for s in spaces] + [APPROVAL])
+        self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces] + [APPROVAL])
 
         wanted = {space_pipeline(s) for s in spaces}
         stale = [p for p in self.pipeline_names()

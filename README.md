@@ -1,40 +1,45 @@
-# jira-karth — Jira release notes pipeline (GoCD)
+# jira-karth — Jira release notes on GoCD
 
-Pipeline-as-code for GoCD. Pick a Jira **workspace** (project) and **release** (fixVersion).
-An AI agent (OpenAI) writes the release notes in the house style defined in `jira_release/ai.py`, renders them to a
-PDF and, optionally, publishes them to Confluence.
+One GoCD pipeline per Jira space. Each one writes that space's release notes with AI (OpenAI),
+renders them to HTML and PDF, and after a manual approval publishes them to Confluence.
 
 ```
-jira-release-notes
-├── stage connect-jira   → job discover-workspaces   (check token, list workspaces + unreleased releases)
-└── stage release-notes  → job generate-release-notes (Jira tickets → OpenAI → HTML/PDF → Confluence)
+                    ┌─▶ jira-space-DEV   ─┐
+                    ├─▶ jira-space-QS    ─┤
+   jira-connect ────┼─▶ jira-space-SCR   ─┼──▶ jira-release-approval (manual) ──▶ Confluence
+                    ├─▶ jira-space-SCRUM ─┤
+                    └─▶ jira-space-SUP   ─┘
 ```
 
-## How to use it
+| Pipeline | What it does |
+|---|---|
+| `jira-connect` | Connects to Jira and lists the spaces in `JIRA_WORKSPACES`. Creates or updates one pipeline per space, and deletes pipelines for spaces that were removed. |
+| `jira-space-<KEY>` | Picks the space's next unreleased fixVersion and its tickets, has OpenAI write the notes, then builds the HTML and PDF. Skips the space if it has no release or no tickets. |
+| `jira-release-approval` | Waits for all the space pipelines. When you click ▶, it publishes every space's notes to Confluence with the PDF attached. |
 
-1. **Run** the pipeline normally. Stage 1 lists every workspace and its releases (see the job's
-   *workspaces* tab). Stage 2 does nothing because no workspace is selected yet.
-2. **Trigger with options**, then set `WORKSPACE=EVO` and `RELEASE=release-26.14`. Stage 1
-   checks your selection and stage 2 generates the notes. The output is in the job's
-   *release-notes* tab and its artifacts (`.pdf`, `.html`, `.content.json`).
+All pipelines are defined in Python (`jira_release/gocd.py`) and created through the GoCD API.
 
-## One-time setup
+## Setup (once)
 
 ```bash
-cp .env.example .env               # fill in JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, OPENAI_API_KEY …
-gocd/agent/start.sh                # local GoCD agent (Docker) with python3 + Chrome
-git push                           # GoCD reads .gocd/*.gocd.yaml from GitHub
-python3 gocd/setup.py              # registers the config repo and creates the "jira-release" environment
+# .env: JIRA_BASE_URL, JIRA_EMAIL, JIRA_TOKEN, JIRA_WORKSPACES, OPENAI_API_KEY, CONFLUENCE_*
+gocd/agent/start.sh 3          # 3 GoCD agents in Docker (python3 + Chrome) so spaces run in parallel
+python3 gocd/setup.py          # secrets → GoCD (encrypted), agents → env, create all pipelines
 ```
 
-`setup.py` stores `JIRA_TOKEN` and `OPENAI_API_KEY` as **secure** GoCD variables. `.env` and
-`*.pdf` are git-ignored because this repo is public. Re-run `setup.py` whenever `.env` changes.
+Re-run `python3 gocd/setup.py` after changing `.env`. `.env` and `*.pdf` are git-ignored because
+this repo is public.
 
-The **agent** needs `python3` (with venv), plus Chrome or Chromium for the PDF. If no `OPENAI_API_KEY` is set, the notes are built without AI and tickets are
-grouped by epic or component.
+## Run
 
-## Run locally
+In GoCD, click ▶ on **jira-connect**. The space pipelines start on their own. Each one has a
+**release-notes** tab and a PDF under its artifacts. Then click ▶ on **jira-release-approval**
+to publish to Confluence.
+
+## Local commands
 
 ```bash
-WORKSPACE=EVO RELEASE=release-26.14 gocd/run.sh generate   # writes to output/
+gocd/run.sh check                       # Jira login works?
+gocd/run.sh discover                    # spaces + the release each will build
+WORKSPACE=SCRUM gocd/run.sh generate    # notes for one space -> output/SCRUM/
 ```

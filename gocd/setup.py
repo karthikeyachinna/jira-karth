@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """Wire this repo into GoCD - run once, re-run any time .env changes (idempotent).
 
-1. Registers the GitHub repo as a GoCD config repo (yaml.config.plugin) so
-   .gocd/*.gocd.yaml defines the `jira-release-notes` pipeline.
-2. Creates/updates the GoCD environment `jira-release` holding the settings from .env.
+1. Creates/updates the GoCD environment `jira-release` holding the settings from .env.
    JIRA_TOKEN / OPENAI_API_KEY are stored as *secure* (encrypted) variables, so no
    secret is ever committed to the public repo.
-3. Adds the pipeline and every registered agent to that environment.
+2. Adds every registered agent to that environment.
+3. Creates all pipelines (jira-connect, one jira-space-<KEY> per Jira space,
+   jira-release-approval) from jira_release/gocd.py via `gocd/run.sh sync`.
+   Removes the old YAML config repo if it is still registered.
 
 Usage:  python3 gocd/setup.py            (GOCD_URL defaults to http://localhost:8153/go)
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
-import time
 from pathlib import Path
 
 import requests
 
 GOCD = os.environ.get("GOCD_URL", "http://localhost:8153/go").rstrip("/")
 AUTH = (os.environ["GOCD_USER"], os.environ["GOCD_PASSWORD"]) if os.environ.get("GOCD_USER") else None
-REPO_ID = "jira-karth"
-REPO_URL = "https://github.com/karthikeyachinna/jira-karth.git"
+REPO_ID = "jira-karth"  # legacy YAML config repo, removed by migrate_from_config_repo()
 ENV_NAME = "jira-release"
-PIPELINE = "jira-connect"
 SECURE = {"JIRA_TOKEN", "OPENAI_API_KEY"}
 SKIP = {"WORKSPACE", "RELEASE"}  # chosen per run via "Trigger with options"
 
@@ -50,17 +49,6 @@ def read_env(path: Path) -> dict[str, str]:
     return out
 
 
-def upsert(path: str, version: int, body: dict) -> None:
-    existing = api("GET", path, version)
-    if existing.status_code == 404:
-        collection = path.rsplit("/", 1)[0]
-        api("POST", collection, version, json=body)
-        print(f"created {path}")
-    else:
-        api("PUT", path, version, json=body, headers={"If-Match": existing.headers["ETag"]})
-        print(f"updated {path}")
-
-
 def main() -> None:
     env_file = Path(__file__).resolve().parent.parent / ".env"
     if not env_file.is_file():
@@ -72,28 +60,7 @@ def main() -> None:
     if missing:
         sys.exit(f".env is missing: {', '.join(missing)}")
 
-    # 1. config repo
-    upsert(f"/admin/config_repos/{REPO_ID}", 4, {
-        "id": REPO_ID, "plugin_id": "yaml.config.plugin",
-        "material": {"type": "git", "attributes": {"url": REPO_URL, "branch": "main",
-                                                   "auto_update": True}},
-        "configuration": [{"key": "file_pattern", "value": ".gocd/*.gocd.yaml"}],
-        # GoCD only lets a config repo define pipelines in groups it is explicitly allowed to use
-        "rules": [{"directive": "allow", "action": "refer", "type": "pipeline_group",
-                   "resource": "jira"},
-                  {"directive": "allow", "action": "refer", "type": "environment",
-                   "resource": ENV_NAME}],
-    })
-
-    # wait for the YAML to be parsed so the pipeline exists
-    for _ in range(30):
-        if api("GET", f"/admin/pipelines/{PIPELINE}", 11).status_code == 200:
-            break
-        time.sleep(2)
-    else:
-        print(f"! pipeline {PIPELINE} not visible yet - push .gocd/ to GitHub, then re-run")
-
-    # 2. environment with variables (secure ones encrypted by GoCD)
+    # 1. environment with variables (secure ones encrypted by GoCD)
     variables = [{"name": k, "value": v, "secure": k in SECURE} for k, v in sorted(values.items())]
     env_path = f"/admin/environments/{ENV_NAME}"
     current = api("GET", env_path, 3)
@@ -102,8 +69,7 @@ def main() -> None:
             "name": ENV_NAME, "pipelines": [], "environment_variables": variables})
         print(f"created {env_path}")
     else:
-        # The environment is partly defined by the YAML (config repo), so GoCD rejects a full
-        # PUT; PATCH only the variables: drop the ones we manage, then add the fresh values.
+        # PATCH only the variables (keeps the pipelines list): drop ours, add fresh values.
         names = {v["name"] for v in variables}
         stale = [v["name"] for v in current.json().get("environment_variables", [])
                  if v["name"] in names]
@@ -114,7 +80,7 @@ def main() -> None:
     print("  variables: " + ", ".join(f"{v['name']}{' (secure)' if v['secure'] else ''}"
                                       for v in variables))
 
-    # 3. agents -> environment
+    # 2. agents -> environment
     agents = api("GET", "/agents", 7).json()["_embedded"]["agents"]
     if agents:
         api("PATCH", "/agents", 7, json={"uuids": [a["uuid"] for a in agents],
@@ -122,7 +88,36 @@ def main() -> None:
                                          "operations": {"environments": {"add": [ENV_NAME]}}})
         print(f"added {len(agents)} agent(s) to {ENV_NAME}")
     else:
-        print("! no GoCD agents registered - start one, then re-run this script")
+        print("! no GoCD agents registered - run gocd/agent/start.sh, then re-run this script")
+
+    # 3. pipelines (all defined in jira_release/gocd.py)
+    migrate_from_config_repo()
+    root = Path(__file__).resolve().parent.parent
+    subprocess.run([str(root / "gocd" / "run.sh"), "sync"], check=True,
+                   env={**os.environ, "GOCD_URL": GOCD})
+
+
+def migrate_from_config_repo() -> None:
+    """Earlier versions defined jira-connect in a YAML config repo. GoCD forbids API pipelines
+    depending on config-repo pipelines, so drop the generated pipelines, then the config repo;
+    `sync` recreates everything through the API (run history is kept by pipeline name)."""
+    if api("GET", f"/admin/config_repos/{REPO_ID}", 4).status_code == 404:
+        return
+    groups = api("GET", "/admin/pipeline_groups", 1).json()["_embedded"]["groups"]
+    generated = [p["name"] for g in groups for p in g.get("pipelines", [])
+                 if p["name"] == "jira-release-approval" or p["name"].startswith("jira-space-")]
+    generated.sort(key=lambda n: n != "jira-release-approval")   # downstream first
+    env = api("GET", f"/admin/environments/{ENV_NAME}", 3)
+    if env.status_code == 200:
+        in_env = {p["name"] for p in env.json().get("pipelines", [])}
+        drop = [n for n in generated if n in in_env]
+        if drop:
+            api("PATCH", f"/admin/environments/{ENV_NAME}", 3,
+                json={"pipelines": {"add": [], "remove": drop}})
+    for name in generated:
+        api("DELETE", f"/admin/pipelines/{name}", 11)
+    api("DELETE", f"/admin/config_repos/{REPO_ID}", 4)
+    print(f"migrated: removed config repo {REPO_ID} and {len(generated)} generated pipeline(s)")
 
 
 if __name__ == "__main__":
