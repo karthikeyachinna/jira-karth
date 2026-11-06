@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
-# Build and (re)start a local GoCD agent container connected to the GoCD server on this host.
+# Build and (re)start N local GoCD agents (default 3) so the per-space jobs run in parallel.
+#   gocd/agent/start.sh        # 3 agents
+#   gocd/agent/start.sh 5      # 5 agents (one per Jira space)
+# Agents auto-register into the "jira-release" environment using the server's auto-register key.
 set -euo pipefail
 cd "$(dirname "$0")"
-docker build -t jira-gocd-agent:local .
-docker rm -f jira-gocd-agent >/dev/null 2>&1 || true
-docker run -d --name jira-gocd-agent --restart unless-stopped \
-  --add-host=host.docker.internal:host-gateway \
-  -e GO_SERVER_URL=http://host.docker.internal:8153/go \
-  jira-gocd-agent:local
-echo "Agent started. It appears under Agents in GoCD; run 'python3 gocd/setup.py' to enable it."
+COUNT="${1:-3}"
+GOCD="${GOCD_URL:-http://localhost:8153/go}"
+
+KEY=$(curl -fsS -H 'Accept: application/xml' "$GOCD/api/admin/config.xml" \
+      | grep -o 'agentAutoRegisterKey="[^"]*"' | cut -d'"' -f2 || true)
+[ -n "$KEY" ] || echo "! could not read the auto-register key; enable agents in the GoCD UI"
+
+docker build -q -t jira-gocd-agent:local . >/dev/null
+docker ps -aq --filter 'name=^jira-gocd-agent' | xargs -r docker rm -f >/dev/null
+
+for i in $(seq 1 "$COUNT"); do
+  docker run -d --name "jira-gocd-agent-$i" --hostname "jira-agent-$i" --restart unless-stopped \
+    --add-host=host.docker.internal:host-gateway \
+    -e GO_SERVER_URL=http://host.docker.internal:8153/go \
+    -e AGENT_AUTO_REGISTER_KEY="$KEY" \
+    -e AGENT_AUTO_REGISTER_ENVIRONMENTS=jira-release \
+    -e AGENT_AUTO_REGISTER_HOSTNAME="jira-agent-$i" \
+    jira-gocd-agent:local >/dev/null
+  echo "started jira-gocd-agent-$i"
+done

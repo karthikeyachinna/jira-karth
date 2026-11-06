@@ -131,3 +131,10 @@ def _raise_for_status(resp: requests.Response) -> None:
             404: "check JIRA_BASE_URL / project key"}.get(resp.status_code, "")
     raise SystemExit(f"Jira API {resp.status_code} on {resp.request.method} {resp.url}: "
                      f"{resp.text[:300]} {('(' + hint + ')') if hint else ''}")
+
+
+def pick_release(versions: list[dict]) -> dict | None:
+    """The next release to ship: unreleased, not archived, earliest release date (undated last)."""
+    open_ = [v for v in versions if not v.get("released") and not v.get("archived")]
+    open_.sort(key=lambda v: (v.get("releaseDate") is None, v.get("releaseDate") or "", v["name"]))
+    return open_[0] if open_ else None

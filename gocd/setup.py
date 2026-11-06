@@ -66,6 +66,8 @@ def main() -> None:
     if not env_file.is_file():
         sys.exit(f"{env_file} not found - copy .env.example to .env and fill it in")
     values = read_env(env_file)
+    # the connect-jira job calls the GoCD API from inside the agent container
+    values.setdefault("GOCD_URL", "http://host.docker.internal:8153/go")
     missing = [k for k in ("JIRA_BASE_URL", "JIRA_EMAIL", "JIRA_TOKEN") if k not in values]
     if missing:
         sys.exit(f".env is missing: {', '.join(missing)}")
