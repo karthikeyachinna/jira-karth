@@ -100,8 +100,13 @@ def cmd_sync(settings: Settings) -> None:
         raise SystemExit("No Jira spaces found - nothing to fan out")
     target = target_release()
     if target and not any(c["current_release"] for c in catalog):
-        raise SystemExit(f"RELEASE={target!r}, but no Jira space has that fixVersion. "
-                         "Create it in Jira or fix the RELEASE variable.")
+        # nothing to build: cancel (skip) jira-connect, so no space pipeline is triggered and
+        # the existing pipelines are left as they are
+        print(f"\nRELEASE={target!r} is not a fixVersion in any Jira space - skipping this run. "
+              "Create it in Jira or change RELEASE in GoCD (Admin > Environments > jira-release).")
+        if not _cancel_self():
+            raise SystemExit(1)   # outside GoCD: still signal that nothing was done
+        return
     GoCD().sync(catalog)
 
 
@@ -120,13 +125,21 @@ def _status_page(out_dir, message: str) -> None:
 def _skip(out_dir, message: str) -> None:
     """Release not in this space: write the status page, then cancel this GoCD stage so the
     run shows GoCD's cancelled (skip) sign instead of a green tick."""
+    _status_page(out_dir, message)
+    _cancel_self()
+
+
+def _cancel_self() -> bool:
+    """Cancel the GoCD stage this job runs in, so the run shows the cancelled (skip) sign.
+    Returns False when not running inside GoCD."""
     import time
     from .gocd import GoCD
 
-    _status_page(out_dir, message)
-    if GoCD().cancel_own_stage():
-        print("[gocd] cancelled this stage (skip)", flush=True)
-        time.sleep(60)          # GoCD stops the job; this only waits for that to happen
+    if not GoCD().cancel_own_stage():
+        return False
+    print("[gocd] cancelled this stage (skip)", flush=True)
+    time.sleep(60)              # GoCD stops the job; this only waits for that to happen
+    return True
 
 
 def cmd_generate(settings: Settings) -> None:
