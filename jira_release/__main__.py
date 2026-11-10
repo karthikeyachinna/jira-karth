@@ -193,26 +193,34 @@ def cmd_combine(settings: Settings) -> None:
     """jira-release-notes-<region> pipeline: merge every space's tickets, then one AI pass and
     one document for NOTES_REGION (set on the pipeline). Without it (local runs): one document
     per region switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES)."""
-    from .config import release_regions
+    from .config import region_spaces, release_regions
 
     spaces = [json.loads(p.read_text()) for p in sorted(OUTPUT_DIR.glob("*/space.json"))]
     pinned = os.environ.get("NOTES_REGION", "").strip().upper()
     regions = [pinned] if pinned else release_regions()
     out = OUTPUT_DIR / "combined"
     out.mkdir(parents=True, exist_ok=True)
-    spaces = [s for s in spaces if s["issues"]]
-    if not regions or not spaces:
-        message = ("No region is switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES) - "
-                   "nothing to write." if not regions else
-                   "No space has tickets on this release - nothing to write.")
-        for region in regions or ("US", "INT"):        # a page for every tab
+    if not regions:
+        for region in ("US", "INT"):                   # a page for every tab
             (out / region).mkdir(exist_ok=True)
-            _status_page(out / region, message)
-        return _skip(out, message)
+            _status_page(out / region, "No region is switched on (RELEASE_REGION_US / "
+                                       "RELEASE_REGION_INT = YES) - nothing to write.")
+        return _skip(out, "No region is switched on - nothing to write.")
 
     print(f"[combine] regions switched on: {', '.join(regions)}")
+    written = 0
     for region in regions:
-        _combine_region(settings, region, spaces, out / region)
+        keys = region_spaces(region, [s["workspace"] for s in spaces])   # RELEASE_SPACES_<R>
+        mine = [s for s in spaces if s["workspace"] in keys and s["issues"]]
+        if not mine:
+            (out / region).mkdir(exist_ok=True)
+            _status_page(out / region, f"{region}: no tickets on this release in spaces "
+                                       f"{', '.join(keys) or '(none)'} - nothing to write.")
+            continue
+        _combine_region(settings, region, mine, out / region)
+        written += 1
+    if not written:
+        _skip(out, "No release notes written.")
 
 
 def _combine_region(settings: Settings, region: str, spaces: list[dict], out) -> None:

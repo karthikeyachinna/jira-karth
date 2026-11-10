@@ -37,6 +37,7 @@ jira:
     SCR: YES
     SUP: YES
     SS: YES
+    EI: YES          # EvI - feeds the International (INT) release notes only
   ready_statuses: [Ready for Release, Released, Closed, Done]
 
 release:
@@ -44,6 +45,9 @@ release:
   regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = jira-release-notes-<US|INT>
     US: NONE             #   US  -> "Release Notes - Sprint <n>"
     INT: YES             #   INT -> "Evolus International - <rel>"   (both YES = two documents)
+  spaces:                # GoCD env var RELEASE_SPACES_<US|INT>: the Jira spaces each region's
+    US: []               #   notes are built from. [] = every space not listed for another region
+    INT: [EI]            #   (so US = all spaces except EI)
 
 ai:
   model: gpt-5.4         # OpenAI model (OPENAI_API_KEY in .env)

@@ -54,6 +54,19 @@ def release_regions() -> list[str]:
     return ["INT" if raw.startswith("INT") else "US"]
 
 
+def region_spaces(region: str, available: list[str]) -> list[str]:
+    """The spaces (out of `available`) whose tickets go into this region's release notes:
+    RELEASE_SPACES_<REGION>=A,B; empty or unset = every space not listed for another region."""
+    from .deploy import REGIONS
+    lists = {r: [k.strip().upper() for k in os.environ.get(f"RELEASE_SPACES_{r}", "").split(",")
+                 if k.strip()] for r in REGIONS}
+    region = region.upper()
+    if lists.get(region):
+        return [s for s in available if s.upper() in lists[region]]
+    claimed = {k for r, keys in lists.items() if r != region for k in keys}
+    return [s for s in available if s.upper() not in claimed]
+
+
 @dataclass
 class Settings:
     jira_base_url: str

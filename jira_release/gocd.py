@@ -21,7 +21,7 @@ from pathlib import Path
 import requests
 
 from . import deploy
-from .config import release_regions
+from .config import region_spaces, release_regions
 
 UPSTREAM = "jira-connect"
 UPSTREAM_STAGE = "connect-jira"
@@ -275,7 +275,9 @@ class GoCD:
             for name in recased:
                 self.delete(name)
         for r in regions:                                 # rewire fan-in before deleting spaces
-            self.upsert(notes_config(r, building, release))
+            # INT = RELEASE_SPACES_INT (e.g. EI); US = every other space
+            self.upsert(notes_config(r, region_spaces(r, building), release))
+            print(f"[gocd] {notes_pipeline(r)} <- {', '.join(region_spaces(r, building)) or 'no space'}")
         self.upsert(approval_config(regions, release))    # before deleting old notes pipelines
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
                            + notes + [APPROVAL])
