@@ -124,13 +124,6 @@ def _status_page(out_dir, message: str) -> None:
     print(message)
 
 
-def _skip(out_dir, message: str) -> None:
-    """Release not in this space: write the status page, then cancel this GoCD stage so the
-    run shows GoCD's cancelled (skip) sign instead of a green tick."""
-    _status_page(out_dir, message)
-    _cancel_self()
-
-
 def _cancel_self() -> bool:
     """Cancel the GoCD stage this job runs in, so the run shows the cancelled (skip) sign.
     Returns False when not running inside GoCD."""
@@ -152,20 +145,23 @@ def cmd_generate(settings: Settings) -> None:
     out = OUTPUT_DIR / settings.workspace
     out.mkdir(parents=True, exist_ok=True)
 
+    # A space without the release PASSES with 0 tickets (no space.json) instead of cancelling:
+    # every space stays wired to its region's notes pipeline, and the fan-in always uses this
+    # run's (empty) result rather than an older passed run with stale tickets.
     skip = os.environ.get("SKIP_REASON", "")
     if skip:
-        return _skip(out, f"{settings.workspace}: {skip} - skipped.")
+        return _status_page(out, f"{settings.workspace}: {skip} - 0 tickets.")
 
     jira = JiraClient(settings)
     if settings.release:
         version = jira.find_version(settings.workspace, settings.release)
         if not version:
-            return _skip(out, f"{settings.workspace}: release {settings.release} is not a "
-                              "fixVersion in this space - skipped.")
+            return _status_page(out, f"{settings.workspace}: release {settings.release} is not "
+                                     "a fixVersion in this space - 0 tickets.")
     else:
         version = pick_release(jira.versions(settings.workspace, status="unreleased"))
         if not version:
-            return _skip(out, f"{settings.workspace}: no unreleased release - skipped.")
+            return _status_page(out, f"{settings.workspace}: no unreleased release - 0 tickets.")
     release = version["name"]
 
     issues = jira.release_issues(settings.workspace, release)
@@ -205,7 +201,7 @@ def cmd_combine(settings: Settings) -> None:
             (out / region).mkdir(exist_ok=True)
             _status_page(out / region, "No region is switched on (RELEASE_REGION_US / "
                                        "RELEASE_REGION_INT = YES) - nothing to write.")
-        return _skip(out, "No region is switched on - nothing to write.")
+        return print("No region is switched on - nothing to write.")
 
     print(f"[combine] regions switched on: {', '.join(regions)}")
     written = 0
@@ -214,13 +210,13 @@ def cmd_combine(settings: Settings) -> None:
         mine = [s for s in spaces if s["workspace"] in keys and s["issues"]]
         if not mine:
             (out / region).mkdir(exist_ok=True)
-            _status_page(out / region, f"{region}: no tickets on this release in spaces "
-                                       f"{', '.join(keys) or '(none)'} - nothing to write.")
+            _status_page(out / region, f"{region}: no tickets on this release in its spaces "
+                                       f"(RELEASE_SPACES_{region}) - nothing to write.")
             continue
         _combine_region(settings, region, mine, out / region)
         written += 1
-    if not written:
-        _skip(out, "No release notes written.")
+    if not written:   # passes (no cancel) so jira-approvals never falls back to an older run
+        print("No release notes written - nothing for jira-approvals to publish.")
 
 
 def _combine_region(settings: Settings, region: str, spaces: list[dict], out) -> None:

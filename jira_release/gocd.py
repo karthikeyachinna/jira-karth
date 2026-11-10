@@ -144,7 +144,7 @@ def space_config(space: dict) -> dict:
         env.append(_var("RELEASE_LABEL", current))
         label = "${env:RELEASE_LABEL}-${COUNT}"
     else:
-        # release not in this space: plain run number (empty release tag), job cancels itself
+        # release not in this space: plain run number (empty release tag), job passes, 0 tickets
         target = space.get("target_release") or ""
         env.append(_var("SKIP_REASON", f"release {target} is not a fixVersion in {key}" if target
                         else f"{key} has no unreleased version"))
@@ -260,8 +260,8 @@ class GoCD:
         self.upsert(connect_config(release))
         for c in catalog:
             self.upsert(space_config(c))
-        # the combined notes wait only for spaces that build the release; a cancelled (skipped)
-        # space must not feed them, or GoCD would fall back to its last passed (stale) run
+        # every space is wired to its region's notes pipeline; a space without the release
+        # passes with 0 tickets (see cmd_generate), so the fan-in never uses a stale run
         building = [c["workspace"] for c in catalog if c.get("current_release")]
         regions = release_regions()                      # RELEASE_REGION_<US|INT>=YES
         notes = [notes_pipeline(r) for r in regions]
@@ -276,8 +276,8 @@ class GoCD:
                 self.delete(name)
         for r in regions:                                 # rewire fan-in before deleting spaces
             # INT = RELEASE_SPACES_INT (e.g. EI); US = every other space
-            self.upsert(notes_config(r, region_spaces(r, building), release))
-            print(f"[gocd] {notes_pipeline(r)} <- {', '.join(region_spaces(r, building)) or 'no space'}")
+            self.upsert(notes_config(r, region_spaces(r, spaces), release))
+            print(f"[gocd] {notes_pipeline(r)} <- {', '.join(region_spaces(r, spaces)) or 'no space'}")
         self.upsert(approval_config(regions, release))    # before deleting old notes pipelines
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
                            + notes + [APPROVAL])
@@ -290,7 +290,7 @@ class GoCD:
             self.delete(name)
         skipped = [c["workspace"] for c in catalog if not c.get("current_release")]
         print(f"[gocd] {len(spaces)} space pipelines; building: {', '.join(building) or 'none'}; "
-              f"will cancel (skip): {', '.join(skipped) or 'none'} -> "
+              f"0 tickets (no release): {', '.join(skipped) or 'none'} -> "
               f"{', '.join(notes) or 'no release-notes pipeline (no region YES)'} -> {APPROVAL}")
 
     def cancel_own_stage(self) -> bool:
