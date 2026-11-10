@@ -75,12 +75,31 @@ def _git_material() -> dict:
         "shallow_clone": True, "filter": {"ignore": ["**/*", "*"]}, "invert_filter": False}}
 
 
-def _dependency(pipeline: str, stage: str, ignore: bool = False) -> dict:
-    """ignore=True: still drawn on the Value Stream Map, but neither triggers this pipeline nor
-    holds it back - used for upstreams that skip (cancel) this run."""
+def _dependency(pipeline: str, stage: str) -> dict:
     return {"type": "dependency", "attributes": {
         "name": pipeline, "pipeline": pipeline, "stage": stage,
-        "auto_update": True, "ignore_for_scheduling": ignore}}
+        "auto_update": True, "ignore_for_scheduling": False}}
+
+
+SKIP_STAGE = "skipped"
+
+
+def _skip_stage(reason: str) -> dict:
+    """Second stage, added only when this run has nothing to do: it cancels itself, so the run
+    shows GoCD's cancelled (skip) sign. Downstream pipelines depend on the FIRST stage, which
+    passes, so GoCD's fan-in always lines up and the flow keeps going. No checkout, no Python:
+    one API call (GOCD_URL / GOCD_USER / GOCD_PASSWORD come from the GoCD environment)."""
+    script = ('echo "$SKIP_REASON - skipped"; '
+              'curl -fsS -u "$GOCD_USER:$GOCD_PASSWORD" -X POST '
+              '-H "Accept: application/vnd.go.cd.v3+json" -H "X-GoCD-Confirm: true" '
+              '"$GOCD_URL/api/stages/$GO_PIPELINE_NAME/$GO_PIPELINE_COUNTER/'
+              '$GO_STAGE_NAME/$GO_STAGE_COUNTER/cancel" && sleep 60')
+    job = _job("skip", [{"type": "exec", "attributes": {
+        "command": "sh", "arguments": ["-c", script], "run_if": ["passed"]}}],
+        environment_variables=[_var("SKIP_REASON", reason)])
+    stage = _stage(SKIP_STAGE, "success", [job])
+    stage["fetch_materials"] = False
+    return stage
 
 
 def _exec(*args: str) -> dict:
@@ -146,50 +165,56 @@ def space_config(space: dict) -> dict:
         env.append(_var("RELEASE_LABEL", current))
         label = "${env:RELEASE_LABEL}-${COUNT}"
     else:
-        # release not in this space: plain run number (empty release tag), job cancels itself
+        # release not in this space: plain run number (empty release tag); stage 1 passes with
+        # 0 tickets, then the "skipped" stage cancels itself (skip sign)
         target = space.get("target_release") or ""
-        env.append(_var("SKIP_REASON", f"release {target} is not a fixVersion in {key}" if target
-                        else f"{key} has no unreleased version"))
+        reason = (f"release {target} is not a fixVersion in {key}" if target
+                  else f"{key} has no unreleased version")
+        env.append(_var("SKIP_REASON", reason))
         label = "${COUNT}"
+    stages = [_stage(SPACE_STAGE, "success", [job])]
+    if not current:
+        stages.append(_skip_stage(reason))
     return _pipeline(SPACES_GROUP, space_pipeline(key),
                      [_dependency(UPSTREAM, UPSTREAM_STAGE), _git_material()],
-                     [_stage(SPACE_STAGE, "success", [job])], label=label, env=env)
+                     stages, label=label, env=env)
 
 
 def notes_config(region: str, spaces: list[str], building: list[str] | None = None,
                  release_label: str = "") -> dict:
-    """ONE release-notes document for the release in one region's layout. Wired to all the
-    region's `spaces`; only those `building` the release (the others skip) trigger it and have
-    their tickets fetched. NOTES_REGION pins the `combine` job to this region."""
+    """ONE release-notes document for the release in one region's layout: fan-in from all the
+    region's `spaces` (their first stage always passes; a space without the release brings 0
+    tickets), one AI pass, HTML + PDF. If none of them is `building` the release, a "skipped"
+    stage marks the run as skipped. NOTES_REGION pins the `combine` job to this region."""
     building = spaces if building is None else [s for s in spaces if s in building]
     fetches = [{"type": "fetch", "attributes": {
         "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
-        "run_if": ["passed"]}} for s in building]
+        "run_if": ["passed"]}} for s in spaces]
     job = _job(NOTES_JOB, fetches + [_exec("combine")],
                tabs=[{"name": "release-notes", "path": f"combined/{region}/release_notes.html"}],
                artifacts=[{"type": "build", "source": "output/combined", "destination": ""}])
     return _pipeline(APPROVAL_GROUP, notes_pipeline(region),
-                     [_dependency(space_pipeline(s), SPACE_STAGE, ignore=s not in building)
-                      for s in spaces] + [_git_material()],
-                     [_stage(NOTES_STAGE, "success", [job])],
+                     [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
+                     + [_git_material()],
+                     [_stage(NOTES_STAGE, "success", [job])]
+                     + ([] if building else [_skip_stage(
+                         f"no {region} space has the release ({', '.join(spaces) or 'none'})")]),
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release"),
                           _var("NOTES_REGION", region)])
 
 
-def approval_config(regions: list[str], active: list[str] | None = None,
-                    release_label: str = "") -> dict:
-    """Wired to every region's release-notes pipeline; waits for and publishes only the
-    `active` ones (regions with at least one space building the release)."""
-    active = regions if active is None else [r for r in regions if r in active]
+def approval_config(regions: list[str], release_label: str = "") -> dict:
+    """Waits for every region's release-notes pipeline and publishes the documents they wrote
+    (a skipped region writes none, so nothing old is ever published for it)."""
     fetches = [{"type": "fetch", "attributes": {
         "artifact_origin": "gocd", "pipeline": notes_pipeline(r), "stage": NOTES_STAGE,
         "job": NOTES_JOB, "is_source_a_file": False, "source": "combined",
-        "destination": "output", "run_if": ["passed"]}} for r in active]
+        "destination": "output", "run_if": ["passed"]}} for r in regions]
     return _pipeline(APPROVAL_GROUP, APPROVAL,
-                     [_dependency(notes_pipeline(r), NOTES_STAGE, ignore=r not in active)
-                      for r in regions] + [_git_material()],
+                     [_dependency(notes_pipeline(r), NOTES_STAGE) for r in regions]
+                     + [_git_material()],
                      # manual first stage: runs only when an approver clicks Approve
                      [_stage("approval", "manual",
                              [_job("publish-confluence", fetches + [_exec("publish")])],
@@ -267,9 +292,9 @@ class GoCD:
         self.upsert(connect_config(release))
         for c in catalog:
             self.upsert(space_config(c))
-        # every space is wired to its region's notes pipeline (Value Stream Map stays whole), but
-        # a space without the release cancels (skips), so its link is ignored for scheduling:
-        # it neither blocks the fan-in nor feeds an older run's tickets
+        # every space is wired to its region's notes pipeline (Value Stream Map stays whole); a
+        # space without the release passes its first stage with 0 tickets (so the fan-in always
+        # lines up on this run) and then shows the skip sign in its "skipped" stage
         building = [c["workspace"] for c in catalog if c.get("current_release")]
         regions = release_regions()                      # RELEASE_REGION_<US|INT>=YES
         notes = [notes_pipeline(r) for r in regions]
@@ -279,19 +304,16 @@ class GoCD:
         recased = [p for p in self.pipeline_names() if p.startswith(NOTES_PREFIX)
                    and p not in notes and p.lower() in {n.lower() for n in notes}]
         if recased:
-            self.upsert(approval_config([], release_label=release))
+            self.upsert(approval_config([], release))
             for name in recased:
                 self.delete(name)
-        active = []
         for r in regions:                                 # rewire fan-in before deleting spaces
             # INT = RELEASE_SPACES_INT (e.g. EI); US = every other space
             mine, live = region_spaces(r, spaces), region_spaces(r, building)
             self.upsert(notes_config(r, mine, live, release))
-            if live:
-                active.append(r)
             print(f"[gocd] {notes_pipeline(r)} <- {', '.join(mine) or 'no space'}"
                   f" (building: {', '.join(live) or 'none - this region skips'})")
-        self.upsert(approval_config(regions, active, release))   # before deleting old notes
+        self.upsert(approval_config(regions, release))    # before deleting old notes pipelines
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
                            + notes + [APPROVAL])
 

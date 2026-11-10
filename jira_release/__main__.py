@@ -124,13 +124,6 @@ def _status_page(out_dir, message: str) -> None:
     print(message)
 
 
-def _skip(out_dir, message: str) -> None:
-    """Release not in this space: write the status page, then cancel this GoCD stage so the
-    run shows GoCD's cancelled (skip) sign instead of a green tick."""
-    _status_page(out_dir, message)
-    _cancel_self()
-
-
 def _cancel_self() -> bool:
     """Cancel the GoCD stage this job runs in, so the run shows the cancelled (skip) sign.
     Returns False when not running inside GoCD."""
@@ -152,22 +145,23 @@ def cmd_generate(settings: Settings) -> None:
     out = OUTPUT_DIR / settings.workspace
     out.mkdir(parents=True, exist_ok=True)
 
-    # A space without the release cancels (skip sign). Its link to the notes pipeline is
-    # "ignore for scheduling" (see GoCD.sync), so the flow stays drawn but is not held up.
+    # A space without the release PASSES this stage with 0 tickets (no space.json), so its
+    # region's notes pipeline always fans in on this run; the pipeline's next stage, "skipped",
+    # cancels itself to show the skip sign (see gocd.space_config).
     skip = os.environ.get("SKIP_REASON", "")
     if skip:
-        return _skip(out, f"{settings.workspace}: {skip} - skipped.")
+        return _status_page(out, f"{settings.workspace}: {skip} - skipped (0 tickets).")
 
     jira = JiraClient(settings)
     if settings.release:
         version = jira.find_version(settings.workspace, settings.release)
         if not version:
-            return _skip(out, f"{settings.workspace}: release {settings.release} is not a "
-                              "fixVersion in this space - skipped.")
+            return _status_page(out, f"{settings.workspace}: release {settings.release} is not "
+                                     "a fixVersion in this space - 0 tickets.")
     else:
         version = pick_release(jira.versions(settings.workspace, status="unreleased"))
         if not version:
-            return _skip(out, f"{settings.workspace}: no unreleased release - skipped.")
+            return _status_page(out, f"{settings.workspace}: no unreleased release - 0 tickets.")
     release = version["name"]
 
     issues = jira.release_issues(settings.workspace, release)
