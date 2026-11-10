@@ -5,7 +5,7 @@
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
     python -m jira_release generate   # jira-space-<KEY> pipeline: collect $WORKSPACE's tickets
     python -m jira_release combine    # jira-release-notes-<US|INT> pipeline: AI release notes, all spaces
-    python -m jira_release publish    # jira-approvals pipeline: publish it to Confluence
+    python -m jira_release publish    # jira-approvals-<US|INT> pipeline: publish to Confluence
 """
 from __future__ import annotations
 
@@ -215,8 +215,8 @@ def cmd_combine(settings: Settings) -> None:
             continue
         _combine_region(settings, region, mine, out / region)
         written += 1
-    if not written:   # passes (no cancel) so jira-approvals never falls back to an older run
-        print("No release notes written - nothing for jira-approvals to publish.")
+    if not written:   # passes (no cancel) so jira-approvals-<R> never falls back to an older run
+        print("No release notes written - nothing for jira-approvals-<R> to publish.")
 
 
 def _combine_region(settings: Settings, region: str, spaces: list[dict], out) -> None:
@@ -252,6 +252,9 @@ def _combine_region(settings: Settings, region: str, spaces: list[dict], out) ->
 
 def cmd_publish(settings: Settings) -> None:
     metas = sorted(OUTPUT_DIR.glob("combined/*/meta.json"))   # one per region
+    pinned = os.environ.get("NOTES_REGION", "").strip().upper()   # set on jira-approvals-<R>
+    if pinned:
+        metas = [m for m in metas if m.parent.name.upper() == pinned]
     if not metas:
         print("Nothing to publish - no combined release notes were produced.")
         return

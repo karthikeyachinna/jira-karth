@@ -17,7 +17,7 @@ gocd:
   groups:                     # pipeline groups
     connect: jira             #   jira-connect
     spaces: jira-spaces       #   jira-space-<KEY>
-    approval: jira-approval   #   jira-release-notes-<US|INT>, jira-approvals
+    approval: jira-approval   #   jira-release-notes-<US|INT>, jira-approvals-<US|INT>
 
 agents:
   docker: true     # start local Docker agents (gocd/agent/). false = agents already exist

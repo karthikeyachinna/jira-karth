@@ -1,10 +1,10 @@
 """Create/update the fan-out pipelines in GoCD: one pipeline per Jira space, one release-notes
-pipeline per region switched on (RELEASE_REGION_<US|INT>=YES), then one Approval.
+pipeline and one manual approval pipeline per region switched on (RELEASE_REGION_<US|INT>=YES).
 
                       ┌─▶ jira-space-DEV   ─┐
-                      ├─▶ jira-space-QS    ─┤   ┌─▶ jira-release-notes-US  ─┐
-    jira-connect ─────┼─▶ jira-space-SCR   ─┼───┤                          ├──▶ jira-approvals
-                      ├─▶ jira-space-SCRUM ─┤   └─▶ jira-release-notes-INT ─┘     (manual)
+                      ├─▶ jira-space-QS    ─┤   ┌─▶ jira-release-notes-US  ──▶ jira-approvals-US  (manual)
+    jira-connect ─────┼─▶ jira-space-SCR   ─┼───┤
+                      ├─▶ jira-space-SCRUM ─┤   └─▶ jira-release-notes-INT ──▶ jira-approvals-INT (manual)
                       └─▶ jira-space-SUP   ─┘     (one AI document each)
 
 Every pipeline is defined here and written through the GoCD API (not a YAML config repo):
@@ -28,11 +28,12 @@ UPSTREAM_STAGE = "connect-jira"
 SPACE_PREFIX = "jira-space-"
 SPACE_STAGE = "release-notes"
 SPACE_JOB = "generate"
-APPROVAL = "jira-approvals"
+APPROVAL_PREFIX = "jira-approvals-"   # + US / INT: one manual approval per region
 NOTES_PREFIX = "jira-release-notes-"  # + us / int: one combined document per region
 NOTES_STAGE = "release-notes"
 NOTES_JOB = "combine"
-LEGACY = ["jira-release-spaces", "jira-release-approval", "jira-release-notes"]   # earlier names, removed on sync
+LEGACY = ["jira-release-spaces", "jira-release-approval", "jira-release-notes",
+          "jira-approvals"]   # earlier names, removed on sync
 # names that differ per GoCD server come from gocd/gocd.yaml
 CONNECT_GROUP = deploy.group("connect")
 SPACES_GROUP = deploy.group("spaces")
@@ -62,6 +63,10 @@ def approval_access() -> dict | None:
 
 def space_pipeline(space: str) -> str:
     return f"{SPACE_PREFIX}{space}"
+
+
+def approval_pipeline(region: str) -> str:
+    return f"{APPROVAL_PREFIX}{region.upper()}"     # jira-approvals-US / -INT
 
 
 def notes_pipeline(region: str) -> str:
@@ -205,22 +210,23 @@ def notes_config(region: str, spaces: list[str], building: list[str] | None = No
                           _var("NOTES_REGION", region)])
 
 
-def approval_config(regions: list[str], release_label: str = "") -> dict:
-    """Waits for every region's release-notes pipeline and publishes the documents they wrote
+def approval_config(region: str, release_label: str = "") -> dict:
+    """jira-approvals-<REGION>: waits for that region's release-notes pipeline; when an
+    approver clicks Approve, publishes its document to the region's Confluence space
     (a skipped region writes none, so nothing old is ever published for it)."""
-    fetches = [{"type": "fetch", "attributes": {
-        "artifact_origin": "gocd", "pipeline": notes_pipeline(r), "stage": NOTES_STAGE,
+    fetch = {"type": "fetch", "attributes": {
+        "artifact_origin": "gocd", "pipeline": notes_pipeline(region), "stage": NOTES_STAGE,
         "job": NOTES_JOB, "is_source_a_file": False, "source": "combined",
-        "destination": "output", "run_if": ["passed"]}} for r in regions]
-    return _pipeline(APPROVAL_GROUP, APPROVAL,
-                     [_dependency(notes_pipeline(r), NOTES_STAGE) for r in regions]
-                     + [_git_material()],
+        "destination": "output", "run_if": ["passed"]}}
+    return _pipeline(APPROVAL_GROUP, approval_pipeline(region),
+                     [_dependency(notes_pipeline(region), NOTES_STAGE), _git_material()],
                      # manual first stage: runs only when an approver clicks Approve
                      [_stage("approval", "manual",
-                             [_job("publish-confluence", fetches + [_exec("publish")])],
+                             [_job("publish-confluence", [fetch, _exec("publish")])],
                              access=approval_access())],
                      label="${env:RELEASE_LABEL}-${COUNT}",
-                     env=[_var("RELEASE_LABEL", release_label or "release")])
+                     env=[_var("RELEASE_LABEL", release_label or "release"),
+                          _var("NOTES_REGION", region)])
 
 
 class GoCD:
@@ -298,35 +304,30 @@ class GoCD:
         building = [c["workspace"] for c in catalog if c.get("current_release")]
         regions = release_regions()                      # RELEASE_REGION_<US|INT>=YES
         notes = [notes_pipeline(r) for r in regions]
-        # GoCD pipeline names are case-insensitive, so a name that differs only in case (the
-        # earlier jira-release-notes-int) cannot be renamed in place: detach jira-approvals
-        # from it, delete it, and let it be created below with the new name
-        recased = [p for p in self.pipeline_names() if p.startswith(NOTES_PREFIX)
-                   and p not in notes and p.lower() in {n.lower() for n in notes}]
-        if recased:
-            self.upsert(approval_config([], release))
-            for name in recased:
-                self.delete(name)
+        approvals = [approval_pipeline(r) for r in regions]
         for r in regions:                                 # rewire fan-in before deleting spaces
             # INT = RELEASE_SPACES_INT (e.g. EI); US = every other space
             mine, live = region_spaces(r, spaces), region_spaces(r, building)
             self.upsert(notes_config(r, mine, live, release))
             print(f"[gocd] {notes_pipeline(r)} <- {', '.join(mine) or 'no space'}"
                   f" (building: {', '.join(live) or 'none - this region skips'})")
-        self.upsert(approval_config(regions, release))    # before deleting old notes pipelines
+            self.upsert(approval_config(r, release))
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
-                           + notes + [APPROVAL])
+                           + notes + approvals)
 
-        wanted = {space_pipeline(s) for s in spaces} | set(notes)
+        wanted = {space_pipeline(s) for s in spaces} | set(notes) | set(approvals)
+        ours = (SPACE_PREFIX, NOTES_PREFIX, APPROVAL_PREFIX)
         stale = [p for p in self.pipeline_names()
-                 if ((p.startswith(SPACE_PREFIX) or p.startswith(NOTES_PREFIX)) and p not in wanted)
-                 or p in LEGACY]
+                 if (p.startswith(ours) and p not in wanted) or p in LEGACY]
+        # downstream first: GoCD refuses to delete a pipeline another one depends on
+        stale.sort(key=lambda p: 0 if p.startswith("jira-approval") else
+                   1 if p.startswith("jira-release") else 2)
         for name in stale:
             self.delete(name)
         skipped = [c["workspace"] for c in catalog if not c.get("current_release")]
         print(f"[gocd] {len(spaces)} space pipelines; building: {', '.join(building) or 'none'}; "
               f"will cancel (skip): {', '.join(skipped) or 'none'} -> "
-              f"{', '.join(notes) or 'no release-notes pipeline (no region YES)'} -> {APPROVAL}")
+              f"{', '.join(f'{n} -> {a}' for n, a in zip(notes, approvals)) or 'no region YES'}")
 
     def cancel_own_stage(self) -> bool:
         """Cancel the stage this job runs in (GoCD shows it as Cancelled). False if not in GoCD."""

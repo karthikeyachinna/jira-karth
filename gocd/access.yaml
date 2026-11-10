@@ -23,7 +23,7 @@ system_admins:
 
 # Admin > Security > Roles (GoCD roles)
 roles:
-  release-approvers: [karthikeya]     # may approve jira-approvals (publish to Confluence)
+  release-approvers: [karthikeya]     # may approve jira-approvals-US / -INT (publish to Confluence)
   jira-developers: [karthikeya]       # may see and run the Jira pipelines
 
 # Admin > Pipelines > group permissions. Omit a group to leave it open to every user.
@@ -41,7 +41,7 @@ groups:
     operate: {roles: [release-approvers]}
     admins:  {users: [karthikeya]}
 
-# Who may approve the manual approval stage of jira-approvals: listed BY USER EMAIL.
+# Who may approve the manual approval stage of jira-approvals-US and -INT: listed BY USER EMAIL.
 # Each email must belong to a user above; only these users can click Approve
 # (they are also given view + operate on the jira-approval group automatically).
 approval:

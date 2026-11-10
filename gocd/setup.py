@@ -12,7 +12,7 @@ Steps:
                    the secrets from .env (JIRA_TOKEN, OPENAI_API_KEY, GOCD_PASSWORD: secure)
   3. agents      - if agents.docker: start agents.count local Docker agents; enable every agent
                    and add it to the environment
-  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes-<US|INT>, jira-approvals
+  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes-<US|INT>, jira-approvals-<US|INT>
                    (jira_release/gocd.py, via `gocd/run.sh sync`)
 """
 from __future__ import annotations
@@ -151,6 +151,7 @@ def migrate_from_config_repo(env_name: str) -> None:
     groups = api("GET", "/admin/pipeline_groups", 1).json()["_embedded"]["groups"]
     generated = [p["name"] for g in groups for p in g.get("pipelines", [])
                  if p["name"] in ("jira-release-approval", "jira-approvals")
+                 or p["name"].startswith("jira-approvals-")
                  or p["name"].startswith("jira-release-notes")
                  or p["name"].startswith("jira-space-")]
     generated.sort(key=lambda n: n.startswith("jira-space-"))   # downstream first
