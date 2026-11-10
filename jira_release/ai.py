@@ -1,6 +1,6 @@
 """AI agent that filters and groups ALL spaces' tickets into one release notes document.
 
-The layout follows the sample release notes for the region in RELEASE_REGION:
+The layout follows the sample release notes for each region switched on (RELEASE_REGION_<US|INT>=YES):
   US  -> "Release Notes - Sprint <n>"            (EE-Release Notes - Sprint 26.14 sample)
   INT -> "Evolus International - <release>"      (EE-Evolus International - release-26.14.2)
 Ticket tables come from Jira in code; the model fills the narrative sections. A section the

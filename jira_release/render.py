@@ -1,6 +1,6 @@
 """Render release notes (XHTML body = valid Confluence storage format), HTML page and PDF.
 
-Two layouts, chosen by RELEASE_REGION, following the sample release notes:
+Two layouts, switched on by RELEASE_REGION_US / RELEASE_REGION_INT = YES, following the sample release notes:
   US  -> "Release Notes - Sprint <n>"
   INT -> "Evolus International - <release>"
 Sections the AI left empty are rendered with their heading and table header but no content, so

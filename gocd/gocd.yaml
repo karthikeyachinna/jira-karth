@@ -41,7 +41,9 @@ jira:
 
 release:
   number: release-26.1   # Jira fixVersion to build (RELEASE); "" = each space's next release
-  region: US             # US -> "Release Notes - Sprint <n>", INT -> "Evolus International - <rel>"
+  regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = build that layout
+    US: NONE             #   US  -> "Release Notes - Sprint <n>"
+    INT: YES             #   INT -> "Evolus International - <rel>"   (both YES = two documents)
 
 ai:
   model: gpt-5.4         # OpenAI model (OPENAI_API_KEY in .env)

@@ -12,7 +12,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS = ("JIRA_TOKEN", "OPENAI_API_KEY", "GOCD_PASSWORD")
 SPACE_PREFIX = "JIRA_WORKSPACES_"   # JIRA_WORKSPACES_<KEY>=YES|NONE, one switch per Jira space
+REGION_PREFIX = "RELEASE_REGION_"   # RELEASE_REGION_<US|INT>=YES|NONE, one switch per layout
+REGIONS = ("US", "INT")
 ON = {"YES", "Y", "TRUE", "ON", "1"}
+
+
+def is_on(value) -> bool:
+    return value is True or str(value).strip().upper() in ON
+
+
+def region_switches() -> dict[str, str]:
+    """release.regions as {US|INT: "YES"|"NONE"}. Accepts a mapping (US: none, INT: yes) or the
+    older release.region: US|INT (that one is YES, the other NONE)."""
+    regions = get("release.regions")
+    if isinstance(regions, dict):
+        return {r: "YES" if is_on(regions.get(r, regions.get(r.lower()))) else "NONE"
+                for r in REGIONS}
+    one = "INT" if str(get("release.region", "US")).strip().upper().startswith("INT") else "US"
+    return {r: "YES" if r == one else "NONE" for r in REGIONS}
 
 
 def space_switches() -> dict[str, str]:
@@ -23,7 +40,7 @@ def space_switches() -> dict[str, str]:
         return {str(k).upper(): "YES" for k in spaces}
     if isinstance(spaces, str):
         return {k.strip().upper(): "YES" for k in spaces.split(",") if k.strip()}
-    return {str(k).upper(): ("YES" if v is True or str(v).strip().upper() in ON else "NONE")
+    return {str(k).upper(): ("YES" if is_on(v) else "NONE")
             for k, v in (spaces or {}).items()}
 
 
@@ -61,10 +78,10 @@ def job_env() -> dict[str, str]:
         "CONFLUENCE_SPACE_KEY": get("confluence.space_key", ""),
         "CONFLUENCE_PARENT_PAGE_ID": str(get("confluence.parent_id", "")),
         "RELEASE": get("release.number", ""),
-        "RELEASE_REGION": get("release.region", "US"),
         "GOCD_URL": get("gocd.agent_url", ""),
     }
     values.update({SPACE_PREFIX + k: v for k, v in space_switches().items()})
+    values.update({REGION_PREFIX + k: v for k, v in region_switches().items()})
     return {k: str(v) for k, v in values.items() if v not in (None, "")}
 
 

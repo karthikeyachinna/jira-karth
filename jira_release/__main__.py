@@ -4,7 +4,7 @@
     python -m jira_release discover   # list spaces and the release each one will build
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
     python -m jira_release generate   # jira-space-<KEY> pipeline: collect $WORKSPACE's tickets
-    python -m jira_release combine    # jira-release-notes pipeline: ONE AI release notes, all spaces
+    python -m jira_release combine    # jira-release-notes pipeline: AI release notes per region, all spaces
     python -m jira_release publish    # jira-approvals pipeline: publish it to Confluence
 """
 from __future__ import annotations
@@ -190,21 +190,37 @@ def cmd_generate(settings: Settings) -> None:
 
 
 def cmd_combine(settings: Settings) -> None:
-    """jira-release-notes pipeline: merge every space's tickets, one AI pass, one document."""
-    from . import ai, render
+    """jira-release-notes pipeline: merge every space's tickets, then one AI pass and one
+    document per region switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES)."""
+    from .config import release_regions
 
     spaces = [json.loads(p.read_text()) for p in sorted(OUTPUT_DIR.glob("*/space.json"))]
+    regions = release_regions()
     out = OUTPUT_DIR / "combined"
     out.mkdir(parents=True, exist_ok=True)
     spaces = [s for s in spaces if s["issues"]]
-    if not spaces:
-        return _skip(out, "No space has tickets on this release - nothing to write.")
+    if not regions or not spaces:
+        message = ("No region is switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES) - "
+                   "nothing to write." if not regions else
+                   "No space has tickets on this release - nothing to write.")
+        for region in regions or ("US", "INT"):        # a page for every tab
+            (out / region).mkdir(exist_ok=True)
+            _status_page(out / region, message)
+        return _skip(out, message)
 
+    print(f"[combine] regions switched on: {', '.join(regions)}")
+    for region in regions:
+        _combine_region(settings, region, spaces, out / region)
+
+
+def _combine_region(settings: Settings, region: str, spaces: list[dict], out) -> None:
+    from . import ai, render
+
+    out.mkdir(parents=True, exist_ok=True)
     version = spaces[0]["version"]
     release = version["name"]
     issues = [i for s in spaces for i in s["issues"]]
     names = ", ".join(s["workspace"] for s in spaces)
-    region = release_region()
     print(f"[combine] {release} ({region} layout): {len(issues)} tickets from {names}")
 
     content = ai.write_content(settings, region, names, version, issues)
@@ -228,17 +244,8 @@ def cmd_combine(settings: Settings) -> None:
     print(f"[done] {title} -> {out}")
 
 
-def release_region() -> str:
-    """RELEASE_REGION on the GoCD environment: US (default) or INT (International)."""
-    raw = os.environ.get("RELEASE_REGION", "US").strip().upper()
-    region = "INT" if raw.startswith("INT") else "US"
-    if raw not in ("US", "INT", "INTERNATIONAL", ""):
-        print(f"[combine] RELEASE_REGION={raw!r} not recognised - using {region}")
-    return region
-
-
 def cmd_publish(settings: Settings) -> None:
-    metas = sorted(OUTPUT_DIR.glob("combined/meta.json"))
+    metas = sorted(OUTPUT_DIR.glob("combined/*/meta.json"))   # one per region
     if not metas:
         print("Nothing to publish - no combined release notes were produced.")
         return

@@ -38,6 +38,22 @@ def _workspaces() -> list[str] | None:
     return legacy or None
 
 
+def release_regions() -> list[str]:
+    """Layouts switched on with RELEASE_REGION_<US|INT>=YES (anything else, e.g. NONE, is off),
+    in the order US, INT. Falls back to the older RELEASE_REGION=US|INT (default US)."""
+    from .deploy import REGION_PREFIX, REGIONS, is_on
+    switches = {k[len(REGION_PREFIX):].upper(): v for k, v in os.environ.items()
+                if k.startswith(REGION_PREFIX) and k != REGION_PREFIX}
+    if switches:
+        unknown = sorted(set(switches) - set(REGIONS))
+        if unknown:
+            print(f"WARNING: ignoring {', '.join(REGION_PREFIX + u for u in unknown)} "
+                  f"(regions are {', '.join(REGIONS)})")
+        return [r for r in REGIONS if is_on(switches.get(r, ""))]
+    raw = os.environ.get("RELEASE_REGION", "US").strip().upper()
+    return ["INT" if raw.startswith("INT") else "US"]
+
+
 @dataclass
 class Settings:
     jira_base_url: str
