@@ -13,7 +13,7 @@ renders them to HTML and PDF, and after a manual approval publishes them to Conf
 
 | Pipeline | What it does |
 |---|---|
-| `jira-connect` | Connects to Jira and lists the spaces in `JIRA_WORKSPACES`. Creates or updates one pipeline per space, and deletes pipelines for spaces that were removed. |
+| `jira-connect` | Connects to Jira and lists the spaces switched on with `JIRA_WORKSPACES_<KEY>=YES` (e.g. `JIRA_WORKSPACES_DEV=YES`, `JIRA_WORKSPACES_SCRUM=NONE`). Creates or updates one pipeline per space, and deletes pipelines for spaces that were removed. |
 | `jira-space-<KEY>` | Picks the space's next unreleased fixVersion and its tickets, has OpenAI write the notes, then builds the HTML and PDF. Skips the space if it has no release or no tickets. |
 | `jira-approvals` | Waits for all the space pipelines. When you click ▶, it publishes every space's notes to Confluence with the PDF attached. |
 

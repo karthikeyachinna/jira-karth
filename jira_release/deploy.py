@@ -11,6 +11,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SECRETS = ("JIRA_TOKEN", "OPENAI_API_KEY", "GOCD_PASSWORD")
+SPACE_PREFIX = "JIRA_WORKSPACES_"   # JIRA_WORKSPACES_<KEY>=YES|NONE, one switch per Jira space
+ON = {"YES", "Y", "TRUE", "ON", "1"}
+
+
+def space_switches() -> dict[str, str]:
+    """jira.spaces as {KEY: "YES"|"NONE"}. Accepts a mapping (DEV: yes, SCRUM: none) or the
+    older list form (every listed space is YES)."""
+    spaces = get("jira.spaces", {})
+    if isinstance(spaces, list):
+        return {str(k).upper(): "YES" for k in spaces}
+    if isinstance(spaces, str):
+        return {k.strip().upper(): "YES" for k in spaces.split(",") if k.strip()}
+    return {str(k).upper(): ("YES" if v is True or str(v).strip().upper() in ON else "NONE")
+            for k, v in (spaces or {}).items()}
 
 
 def config_path() -> Path:
@@ -42,7 +56,6 @@ def job_env() -> dict[str, str]:
     values = {
         "JIRA_BASE_URL": get("jira.base_url", ""),
         "JIRA_EMAIL": get("jira.email", ""),
-        "JIRA_WORKSPACES": csv(get("jira.spaces", [])),
         "READY_STATUSES": csv(get("jira.ready_statuses", [])),
         "OPENAI_MODEL": get("ai.model", ""),
         "CONFLUENCE_SPACE_KEY": get("confluence.space_key", ""),
@@ -51,6 +64,7 @@ def job_env() -> dict[str, str]:
         "RELEASE_REGION": get("release.region", "US"),
         "GOCD_URL": get("gocd.agent_url", ""),
     }
+    values.update({SPACE_PREFIX + k: v for k, v in space_switches().items()})
     return {k: str(v) for k, v in values.items() if v not in (None, "")}
 
 

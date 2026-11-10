@@ -99,8 +99,10 @@ def main() -> None:
             "name": env_name, "pipelines": [], "environment_variables": variables})
         print(f"  created {env_name}")
     else:   # PATCH only our variables (keeps pipelines and any extra variables)
+        # also drop the old JIRA_WORKSPACES list and switches for spaces removed from the yaml
         stale = [v["name"] for v in current.json().get("environment_variables", [])
-                 if v["name"] in values]
+                 if v["name"] in values or v["name"] == "JIRA_WORKSPACES"
+                 or v["name"].startswith(deploy.SPACE_PREFIX)]
         if stale:
             api("PATCH", env_path, 3, json={"environment_variables": {"add": [], "remove": stale}})
         api("PATCH", env_path, 3, json={"environment_variables": {"add": variables, "remove": []}})

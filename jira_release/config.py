@@ -26,12 +26,24 @@ def _csv(name: str, default: str = "") -> list[str]:
     return [v.strip() for v in os.environ.get(name, default).split(",") if v.strip()]
 
 
+def _workspaces() -> list[str] | None:
+    """Spaces switched on with JIRA_WORKSPACES_<KEY>=YES (anything else, e.g. NONE, is off).
+    Falls back to the older JIRA_WORKSPACES=A,B,C list. None = no filter (all Jira spaces)."""
+    from .deploy import ON, SPACE_PREFIX
+    switches = {k[len(SPACE_PREFIX):].upper(): v.strip().upper()
+                for k, v in os.environ.items() if k.startswith(SPACE_PREFIX) and k != SPACE_PREFIX}
+    if switches:
+        return sorted(k for k, v in switches.items() if v in ON)
+    legacy = [w.upper() for w in _csv("JIRA_WORKSPACES")]
+    return legacy or None
+
+
 @dataclass
 class Settings:
     jira_base_url: str
     jira_email: str
     jira_token: str
-    workspaces: list[str]
+    workspaces: list[str] | None   # None = every Jira space
     ready_statuses: list[str]
     openai_api_key: str
     openai_model: str
@@ -54,7 +66,7 @@ class Settings:
             jira_base_url=os.environ.get("JIRA_BASE_URL", "").rstrip("/"),
             jira_email=os.environ.get("JIRA_EMAIL", ""),
             jira_token=os.environ.get("JIRA_TOKEN", ""),
-            workspaces=[w.upper() for w in _csv("JIRA_WORKSPACES")],
+            workspaces=_workspaces(),
             ready_statuses=_csv("READY_STATUSES", "Ready for Release,Released,Closed,Done"),
             openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
             openai_model=os.environ.get("OPENAI_MODEL", "gpt-5"),

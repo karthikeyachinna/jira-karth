@@ -41,7 +41,8 @@ def cmd_check(settings: Settings) -> None:
 def cmd_discover(settings: Settings) -> list[dict]:
     jira = JiraClient(settings)
     projects = jira.projects()
-    if settings.workspaces:
+    if settings.workspaces is not None:          # only spaces with JIRA_WORKSPACES_<KEY>=YES
+        print(f"Spaces switched on: {', '.join(settings.workspaces) or 'none'}")
         projects = [p for p in projects if p["key"].upper() in settings.workspaces]
         missing = set(settings.workspaces) - {p["key"].upper() for p in projects}
         if missing:

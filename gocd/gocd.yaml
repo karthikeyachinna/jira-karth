@@ -30,7 +30,13 @@ repo:              # the repo GoCD checks out (this code); a push to branch trig
 jira:
   base_url: https://bommidikarthikeyachinna.atlassian.net
   email: bommidi.karthikeya.chinna@gmail.com         # account that owns JIRA_TOKEN
-  spaces: [DEV, SCRUM, QS, SCR, SUP, SS]              # one jira-space-<KEY> pipeline each
+  spaces:            # GoCD env var JIRA_WORKSPACES_<KEY>; YES = jira-space-<KEY> pipeline,
+    DEV: YES         #   NONE = space skipped (its pipeline is removed on the next sync).
+    SCRUM: YES       # You can also flip a switch in GoCD (Admin > Environments > jira-release);
+    QS: YES          # re-running bootstrap.sh resets them to the values here.
+    SCR: YES
+    SUP: YES
+    SS: YES
   ready_statuses: [Ready for Release, Released, Closed, Done]
 
 release:
