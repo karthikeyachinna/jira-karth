@@ -157,8 +157,8 @@ def notes_config(spaces: list[str], release_label: str = "") -> dict:
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
         "run_if": ["passed"]}} for s in spaces]
     job = _job(NOTES_JOB, fetches + [_exec("combine")],
-               tabs=[{"name": f"release-notes-{r}", "path": f"combined/{r}/release_notes.html"}
-                     for r in release_regions()],
+               tabs=[{"name": f"notes-{r}", "path": f"combined/{r}/release_notes.html"}
+                     for r in release_regions()],          # GoCD: tab name <= 15 chars
                artifacts=[{"type": "build", "source": "output/combined", "destination": ""}])
     return _pipeline(APPROVAL_GROUP, NOTES,
                      [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
