@@ -4,7 +4,7 @@
     python -m jira_release discover   # list spaces and the release each one will build
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
     python -m jira_release generate   # jira-space-<KEY> pipeline: collect $WORKSPACE's tickets
-    python -m jira_release combine    # jira-release-notes-<us|int> pipeline: AI release notes, all spaces
+    python -m jira_release combine    # jira-release-notes-<US|INT> pipeline: AI release notes, all spaces
     python -m jira_release publish    # jira-approvals pipeline: publish it to Confluence
 """
 from __future__ import annotations
@@ -184,7 +184,7 @@ def cmd_generate(settings: Settings) -> None:
         f"<!doctype html><html><head><meta charset='utf-8'><style>{render.CSS}</style></head>"
         f"<body><p>{_badge(release)}</p><h2>{escape(settings.workspace)}: {len(issues)} tickets "
         "collected</h2><p>They are merged with the other spaces and written up by AI in the "
-        "<b>jira-release-notes-us / -int</b> pipelines.</p><table><thead><tr><th>Key</th><th>Type</th>"
+        "<b>jira-release-notes-US / -INT</b> pipelines.</p><table><thead><tr><th>Key</th><th>Type</th>"
         f"<th>Status</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></body></html>")
     print(f"[done] collected {len(issues)} tickets for {settings.workspace} / {release}")
 

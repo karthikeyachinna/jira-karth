@@ -2,9 +2,9 @@
 pipeline per region switched on (RELEASE_REGION_<US|INT>=YES), then one Approval.
 
                       ┌─▶ jira-space-DEV   ─┐
-                      ├─▶ jira-space-QS    ─┤   ┌─▶ jira-release-notes-us  ─┐
+                      ├─▶ jira-space-QS    ─┤   ┌─▶ jira-release-notes-US  ─┐
     jira-connect ─────┼─▶ jira-space-SCR   ─┼───┤                          ├──▶ jira-approvals
-                      ├─▶ jira-space-SCRUM ─┤   └─▶ jira-release-notes-int ─┘     (manual)
+                      ├─▶ jira-space-SCRUM ─┤   └─▶ jira-release-notes-INT ─┘     (manual)
                       └─▶ jira-space-SUP   ─┘     (one AI document each)
 
 Every pipeline is defined here and written through the GoCD API (not a YAML config repo):
@@ -65,7 +65,7 @@ def space_pipeline(space: str) -> str:
 
 
 def notes_pipeline(region: str) -> str:
-    return f"{NOTES_PREFIX}{region.lower()}"
+    return f"{NOTES_PREFIX}{region.upper()}"     # jira-release-notes-US / -INT
 
 
 def _git_material() -> dict:
@@ -265,6 +265,15 @@ class GoCD:
         building = [c["workspace"] for c in catalog if c.get("current_release")]
         regions = release_regions()                      # RELEASE_REGION_<US|INT>=YES
         notes = [notes_pipeline(r) for r in regions]
+        # GoCD pipeline names are case-insensitive, so a name that differs only in case (the
+        # earlier jira-release-notes-int) cannot be renamed in place: detach jira-approvals
+        # from it, delete it, and let it be created below with the new name
+        recased = [p for p in self.pipeline_names() if p.startswith(NOTES_PREFIX)
+                   and p not in notes and p.lower() in {n.lower() for n in notes}]
+        if recased:
+            self.upsert(approval_config([], release))
+            for name in recased:
+                self.delete(name)
         for r in regions:                                 # rewire fan-in before deleting spaces
             self.upsert(notes_config(r, building, release))
         self.upsert(approval_config(regions, release))    # before deleting old notes pipelines

@@ -17,7 +17,7 @@ gocd:
   groups:                     # pipeline groups
     connect: jira             #   jira-connect
     spaces: jira-spaces       #   jira-space-<KEY>
-    approval: jira-approval   #   jira-release-notes-<us|int>, jira-approvals
+    approval: jira-approval   #   jira-release-notes-<US|INT>, jira-approvals
 
 agents:
   docker: true     # start local Docker agents (gocd/agent/). false = agents already exist
@@ -41,7 +41,7 @@ jira:
 
 release:
   number: release-26.1   # Jira fixVersion to build (RELEASE); "" = each space's next release
-  regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = jira-release-notes-<us|int>
+  regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = jira-release-notes-<US|INT>
     US: NONE             #   US  -> "Release Notes - Sprint <n>"
     INT: YES             #   INT -> "Evolus International - <rel>"   (both YES = two documents)
 

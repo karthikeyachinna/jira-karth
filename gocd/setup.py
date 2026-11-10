@@ -12,7 +12,7 @@ Steps:
                    the secrets from .env (JIRA_TOKEN, OPENAI_API_KEY, GOCD_PASSWORD: secure)
   3. agents      - if agents.docker: start agents.count local Docker agents; enable every agent
                    and add it to the environment
-  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes-<us|int>, jira-approvals
+  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes-<US|INT>, jira-approvals
                    (jira_release/gocd.py, via `gocd/run.sh sync`)
 """
 from __future__ import annotations
