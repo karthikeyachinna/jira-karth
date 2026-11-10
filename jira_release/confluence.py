@@ -8,19 +8,20 @@ import requests
 from .config import Settings
 
 
-def publish(settings: Settings, title: str, body_xhtml: str, pdf: Path | None) -> str:
+def publish(settings: Settings, title: str, body_xhtml: str, pdf: Path | None,
+            space_key: str, parent_page_id: str) -> str:
     base = f"{settings.jira_base_url}/wiki"
     s = requests.Session()
     s.auth = (settings.jira_email, settings.jira_token)
     s.headers.update({"Accept": "application/json"})
 
-    r = s.get(f"{base}/api/v2/spaces", params={"keys": settings.confluence_space_key}, timeout=60)
+    r = s.get(f"{base}/api/v2/spaces", params={"keys": space_key}, timeout=60)
     r.raise_for_status()
     spaces = r.json().get("results", [])
     if not spaces:
-        raise SystemExit(f"Confluence space {settings.confluence_space_key!r} not found")
+        raise SystemExit(f"Confluence space {space_key!r} not found")
     space_id = spaces[0]["id"]
-    parent_id = _resolve_parent(s, base, settings.confluence_parent_page_id,
+    parent_id = _resolve_parent(s, base, parent_page_id,
                                 spaces[0].get("homepageId"))
 
     r = s.get(f"{base}/api/v2/pages", params={"space-id": space_id, "title": title}, timeout=60)
@@ -57,7 +58,7 @@ def publish(settings: Settings, title: str, body_xhtml: str, pdf: Path | None) -
 
 
 def _resolve_parent(s: requests.Session, base: str, wanted: str, homepage: str | None) -> str | None:
-    """CONFLUENCE_PARENT_PAGE_ID may be a page or a folder. If it no longer exists (e.g. it was
+    """CONFLUENCE_PARENT_PAGE_ID_<REGION> may be a page or a folder. If it no longer exists (e.g. it was
     an unpublished draft or got deleted), publish under the space home page instead of failing."""
     if not wanted:
         return homepage
@@ -65,5 +66,5 @@ def _resolve_parent(s: requests.Session, base: str, wanted: str, homepage: str |
         if s.get(f"{base}/api/v2/{kind}/{wanted}", timeout=60).ok:
             return wanted
     print(f"[confluence] WARNING: parent {wanted} not found (deleted or still a draft) - "
-          f"publishing under the space home page {homepage}. Fix CONFLUENCE_PARENT_PAGE_ID.")
+          f"publishing under the space home page {homepage}. Fix CONFLUENCE_PARENT_PAGE_ID_<REGION>.")
     return homepage

@@ -12,7 +12,7 @@ Steps:
                    the secrets from .env (JIRA_TOKEN, OPENAI_API_KEY, GOCD_PASSWORD: secure)
   3. agents      - if agents.docker: start agents.count local Docker agents; enable every agent
                    and add it to the environment
-  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes, jira-approvals
+  4. pipelines   - create jira-connect, jira-space-<KEY>, jira-release-notes-<us|int>, jira-approvals
                    (jira_release/gocd.py, via `gocd/run.sh sync`)
 """
 from __future__ import annotations
@@ -101,7 +101,9 @@ def main() -> None:
     else:   # PATCH only our variables (keeps pipelines and any extra variables)
         # also drop the old JIRA_WORKSPACES list and switches for spaces removed from the yaml
         stale = [v["name"] for v in current.json().get("environment_variables", [])
-                 if v["name"] in values or v["name"] in ("JIRA_WORKSPACES", "RELEASE_REGION")
+                 if v["name"] in values or v["name"] in ("JIRA_WORKSPACES", "RELEASE_REGION",
+                                                     "CONFLUENCE_SPACE_KEY",
+                                                     "CONFLUENCE_PARENT_PAGE_ID")
                  or v["name"].startswith((deploy.SPACE_PREFIX, deploy.REGION_PREFIX))]
         if stale:
             api("PATCH", env_path, 3, json={"environment_variables": {"add": [], "remove": stale}})
@@ -147,7 +149,8 @@ def migrate_from_config_repo(env_name: str) -> None:
         return
     groups = api("GET", "/admin/pipeline_groups", 1).json()["_embedded"]["groups"]
     generated = [p["name"] for g in groups for p in g.get("pipelines", [])
-                 if p["name"] in ("jira-release-approval", "jira-approvals", "jira-release-notes")
+                 if p["name"] in ("jira-release-approval", "jira-approvals")
+                 or p["name"].startswith("jira-release-notes")
                  or p["name"].startswith("jira-space-")]
     generated.sort(key=lambda n: n.startswith("jira-space-"))   # downstream first
     env = api("GET", f"/admin/environments/{env_name}", 3)

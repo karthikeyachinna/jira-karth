@@ -1,10 +1,11 @@
-"""Create/update the fan-out pipelines in GoCD: one pipeline per Jira space, then one Approval.
+"""Create/update the fan-out pipelines in GoCD: one pipeline per Jira space, one release-notes
+pipeline per region switched on (RELEASE_REGION_<US|INT>=YES), then one Approval.
 
                       ┌─▶ jira-space-DEV   ─┐
-                      ├─▶ jira-space-QS    ─┤
-    jira-connect ─────┼─▶ jira-space-SCR   ─┼──▶ jira-release-notes ──▶ jira-approvals (manual)
-                      ├─▶ jira-space-SCRUM ─┤    (one AI document)
-                      └─▶ jira-space-SUP   ─┘
+                      ├─▶ jira-space-QS    ─┤   ┌─▶ jira-release-notes-us  ─┐
+    jira-connect ─────┼─▶ jira-space-SCR   ─┼───┤                          ├──▶ jira-approvals
+                      ├─▶ jira-space-SCRUM ─┤   └─▶ jira-release-notes-int ─┘     (manual)
+                      └─▶ jira-space-SUP   ─┘     (one AI document each)
 
 Every pipeline is defined here and written through the GoCD API (not a YAML config repo):
 GoCD does not allow API-defined pipelines to depend on config-repo pipelines, and the number of
@@ -28,10 +29,10 @@ SPACE_PREFIX = "jira-space-"
 SPACE_STAGE = "release-notes"
 SPACE_JOB = "generate"
 APPROVAL = "jira-approvals"
-NOTES = "jira-release-notes"          # one combined document for all spaces
+NOTES_PREFIX = "jira-release-notes-"  # + us / int: one combined document per region
 NOTES_STAGE = "release-notes"
 NOTES_JOB = "combine"
-LEGACY = ["jira-release-spaces", "jira-release-approval"]   # earlier names, removed on sync
+LEGACY = ["jira-release-spaces", "jira-release-approval", "jira-release-notes"]   # earlier names, removed on sync
 # names that differ per GoCD server come from gocd/gocd.yaml
 CONNECT_GROUP = deploy.group("connect")
 SPACES_GROUP = deploy.group("spaces")
@@ -61,6 +62,10 @@ def approval_access() -> dict | None:
 
 def space_pipeline(space: str) -> str:
     return f"{SPACE_PREFIX}{space}"
+
+
+def notes_pipeline(region: str) -> str:
+    return f"{NOTES_PREFIX}{region.lower()}"
 
 
 def _git_material() -> dict:
@@ -149,35 +154,38 @@ def space_config(space: dict) -> dict:
                      [_stage(SPACE_STAGE, "success", [job])], label=label, env=env)
 
 
-def notes_config(spaces: list[str], release_label: str = "") -> dict:
-    """ONE release-notes document for the release: fan-in from every space that builds it,
-    fetch their collected tickets, one AI pass (filter + group across spaces), HTML + PDF."""
+def notes_config(region: str, spaces: list[str], release_label: str = "") -> dict:
+    """ONE release-notes document for the release in one region's layout: fan-in from every
+    space that builds it, fetch their collected tickets, one AI pass (filter + group across
+    spaces), HTML + PDF. NOTES_REGION pins the `combine` job to this region."""
     fetches = [{"type": "fetch", "attributes": {
         "artifact_origin": "gocd", "pipeline": space_pipeline(s), "stage": SPACE_STAGE,
         "job": SPACE_JOB, "is_source_a_file": False, "source": s, "destination": "output",
         "run_if": ["passed"]}} for s in spaces]
     job = _job(NOTES_JOB, fetches + [_exec("combine")],
-               tabs=[{"name": f"notes-{r}", "path": f"combined/{r}/release_notes.html"}
-                     for r in release_regions()],          # GoCD: tab name <= 15 chars
+               tabs=[{"name": "release-notes", "path": f"combined/{region}/release_notes.html"}],
                artifacts=[{"type": "build", "source": "output/combined", "destination": ""}])
-    return _pipeline(APPROVAL_GROUP, NOTES,
+    return _pipeline(APPROVAL_GROUP, notes_pipeline(region),
                      [_dependency(space_pipeline(s), SPACE_STAGE) for s in spaces]
                      + [_git_material()],
                      [_stage(NOTES_STAGE, "success", [job])],
                      label="${env:RELEASE_LABEL}-${COUNT}",
-                     env=[_var("RELEASE_LABEL", release_label or "release")])
+                     env=[_var("RELEASE_LABEL", release_label or "release"),
+                          _var("NOTES_REGION", region)])
 
 
-def approval_config(release_label: str = "") -> dict:
-    fetch = {"type": "fetch", "attributes": {
-        "artifact_origin": "gocd", "pipeline": NOTES, "stage": NOTES_STAGE, "job": NOTES_JOB,
-        "is_source_a_file": False, "source": "combined", "destination": "output",
-        "run_if": ["passed"]}}
+def approval_config(regions: list[str], release_label: str = "") -> dict:
+    """Waits for every region's release-notes pipeline; publishes all their documents."""
+    fetches = [{"type": "fetch", "attributes": {
+        "artifact_origin": "gocd", "pipeline": notes_pipeline(r), "stage": NOTES_STAGE,
+        "job": NOTES_JOB, "is_source_a_file": False, "source": "combined",
+        "destination": "output", "run_if": ["passed"]}} for r in regions]
     return _pipeline(APPROVAL_GROUP, APPROVAL,
-                     [_dependency(NOTES, NOTES_STAGE), _git_material()],
+                     [_dependency(notes_pipeline(r), NOTES_STAGE) for r in regions]
+                     + [_git_material()],
                      # manual first stage: runs only when an approver clicks Approve
                      [_stage("approval", "manual",
-                             [_job("publish-confluence", [fetch, _exec("publish")])],
+                             [_job("publish-confluence", fetches + [_exec("publish")])],
                              access=approval_access())],
                      label="${env:RELEASE_LABEL}-${COUNT}",
                      env=[_var("RELEASE_LABEL", release_label or "release")])
@@ -255,19 +263,24 @@ class GoCD:
         # the combined notes wait only for spaces that build the release; a cancelled (skipped)
         # space must not feed them, or GoCD would fall back to its last passed (stale) run
         building = [c["workspace"] for c in catalog if c.get("current_release")]
-        self.upsert(notes_config(building, release))      # rewire fan-in before deleting spaces
-        self.upsert(approval_config(release))
+        regions = release_regions()                      # RELEASE_REGION_<US|INT>=YES
+        notes = [notes_pipeline(r) for r in regions]
+        for r in regions:                                 # rewire fan-in before deleting spaces
+            self.upsert(notes_config(r, building, release))
+        self.upsert(approval_config(regions, release))    # before deleting old notes pipelines
         self.env_pipelines(add=[UPSTREAM] + [space_pipeline(s) for s in spaces]
-                           + [NOTES, APPROVAL])
+                           + notes + [APPROVAL])
 
-        wanted = {space_pipeline(s) for s in spaces}
+        wanted = {space_pipeline(s) for s in spaces} | set(notes)
         stale = [p for p in self.pipeline_names()
-                 if (p.startswith(SPACE_PREFIX) and p not in wanted) or p in LEGACY]
+                 if ((p.startswith(SPACE_PREFIX) or p.startswith(NOTES_PREFIX)) and p not in wanted)
+                 or p in LEGACY]
         for name in stale:
             self.delete(name)
         skipped = [c["workspace"] for c in catalog if not c.get("current_release")]
         print(f"[gocd] {len(spaces)} space pipelines; building: {', '.join(building) or 'none'}; "
-              f"will cancel (skip): {', '.join(skipped) or 'none'} -> {NOTES} -> {APPROVAL}")
+              f"will cancel (skip): {', '.join(skipped) or 'none'} -> "
+              f"{', '.join(notes) or 'no release-notes pipeline (no region YES)'} -> {APPROVAL}")
 
     def cancel_own_stage(self) -> bool:
         """Cancel the stage this job runs in (GoCD shows it as Cancelled). False if not in GoCD."""

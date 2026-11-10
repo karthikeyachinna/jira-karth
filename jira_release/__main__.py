@@ -4,7 +4,7 @@
     python -m jira_release discover   # list spaces and the release each one will build
     python -m jira_release sync       # jira-connect job: discover + create one pipeline per space
     python -m jira_release generate   # jira-space-<KEY> pipeline: collect $WORKSPACE's tickets
-    python -m jira_release combine    # jira-release-notes pipeline: AI release notes per region, all spaces
+    python -m jira_release combine    # jira-release-notes-<us|int> pipeline: AI release notes, all spaces
     python -m jira_release publish    # jira-approvals pipeline: publish it to Confluence
 """
 from __future__ import annotations
@@ -184,18 +184,20 @@ def cmd_generate(settings: Settings) -> None:
         f"<!doctype html><html><head><meta charset='utf-8'><style>{render.CSS}</style></head>"
         f"<body><p>{_badge(release)}</p><h2>{escape(settings.workspace)}: {len(issues)} tickets "
         "collected</h2><p>They are merged with the other spaces and written up by AI in the "
-        "<b>jira-release-notes</b> pipeline.</p><table><thead><tr><th>Key</th><th>Type</th>"
+        "<b>jira-release-notes-us / -int</b> pipelines.</p><table><thead><tr><th>Key</th><th>Type</th>"
         f"<th>Status</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></body></html>")
     print(f"[done] collected {len(issues)} tickets for {settings.workspace} / {release}")
 
 
 def cmd_combine(settings: Settings) -> None:
-    """jira-release-notes pipeline: merge every space's tickets, then one AI pass and one
-    document per region switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES)."""
+    """jira-release-notes-<region> pipeline: merge every space's tickets, then one AI pass and
+    one document for NOTES_REGION (set on the pipeline). Without it (local runs): one document
+    per region switched on (RELEASE_REGION_US / RELEASE_REGION_INT = YES)."""
     from .config import release_regions
 
     spaces = [json.loads(p.read_text()) for p in sorted(OUTPUT_DIR.glob("*/space.json"))]
-    regions = release_regions()
+    pinned = os.environ.get("NOTES_REGION", "").strip().upper()
+    regions = [pinned] if pinned else release_regions()
     out = OUTPUT_DIR / "combined"
     out.mkdir(parents=True, exist_ok=True)
     spaces = [s for s in spaces if s["issues"]]
@@ -249,16 +251,20 @@ def cmd_publish(settings: Settings) -> None:
     if not metas:
         print("Nothing to publish - no combined release notes were produced.")
         return
-    if not settings.confluence_space_key:
-        print("CONFLUENCE_SPACE_KEY not set - approved, but nothing is published.")
-        return
     from . import confluence
 
     for meta_path in metas:
         meta = json.loads(meta_path.read_text())
+        region = meta.get("region") or meta_path.parent.name
+        space_key, parent_id = settings.confluence_target(region)
+        if not space_key:
+            print(f"CONFLUENCE_SPACE_KEY_{region} not set - {meta['title']!r} is not published.")
+            continue
+        print(f"[confluence] {region}: space {space_key}, parent {parent_id or '(space home)'}")
         folder = meta_path.parent
         pdf = folder / meta["pdf"] if meta.get("pdf") else None
-        confluence.publish(settings, meta["title"], (folder / "body.xhtml").read_text(), pdf)
+        confluence.publish(settings, meta["title"], (folder / "body.xhtml").read_text(), pdf,
+                           space_key, parent_id)
 
 
 def main() -> None:

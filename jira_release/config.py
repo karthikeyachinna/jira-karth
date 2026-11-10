@@ -92,6 +92,15 @@ class Settings:
             release=os.environ.get("RELEASE", "").strip(),
         )
 
+    def confluence_target(self, region: str) -> tuple[str, str]:
+        """(space key, parent page/folder id) for a region: CONFLUENCE_SPACE_KEY_<REGION> and
+        CONFLUENCE_PARENT_PAGE_ID_<REGION>, falling back to the older un-suffixed variables."""
+        r = region.upper()
+        space = os.environ.get(f"CONFLUENCE_SPACE_KEY_{r}")
+        parent = os.environ.get(f"CONFLUENCE_PARENT_PAGE_ID_{r}")
+        return ((self.confluence_space_key if space is None else space).strip(),
+                (self.confluence_parent_page_id if parent is None else parent).strip())
+
     def require_jira(self) -> None:
         missing = [n for n, v in (("JIRA_BASE_URL", self.jira_base_url),
                                   ("JIRA_EMAIL", self.jira_email),

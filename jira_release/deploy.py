@@ -75,13 +75,16 @@ def job_env() -> dict[str, str]:
         "JIRA_EMAIL": get("jira.email", ""),
         "READY_STATUSES": csv(get("jira.ready_statuses", [])),
         "OPENAI_MODEL": get("ai.model", ""),
-        "CONFLUENCE_SPACE_KEY": get("confluence.space_key", ""),
-        "CONFLUENCE_PARENT_PAGE_ID": str(get("confluence.parent_id", "")),
         "RELEASE": get("release.number", ""),
         "GOCD_URL": get("gocd.agent_url", ""),
     }
     values.update({SPACE_PREFIX + k: v for k, v in space_switches().items()})
     values.update({REGION_PREFIX + k: v for k, v in region_switches().items()})
+    for r in REGIONS:
+        values[f"CONFLUENCE_SPACE_KEY_{r}"] = get(f"confluence.{r}.space_key",
+                                                  get("confluence.space_key", ""))
+        values[f"CONFLUENCE_PARENT_PAGE_ID_{r}"] = str(get(f"confluence.{r}.parent_id",
+                                                           get("confluence.parent_id", "")))
     return {k: str(v) for k, v in values.items() if v not in (None, "")}
 
 

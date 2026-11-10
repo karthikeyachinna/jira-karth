@@ -17,7 +17,7 @@ gocd:
   groups:                     # pipeline groups
     connect: jira             #   jira-connect
     spaces: jira-spaces       #   jira-space-<KEY>
-    approval: jira-approval   #   jira-release-notes, jira-approvals
+    approval: jira-approval   #   jira-release-notes-<us|int>, jira-approvals
 
 agents:
   docker: true     # start local Docker agents (gocd/agent/). false = agents already exist
@@ -41,16 +41,21 @@ jira:
 
 release:
   number: release-26.1   # Jira fixVersion to build (RELEASE); "" = each space's next release
-  regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = build that layout
+  regions:               # GoCD env var RELEASE_REGION_<US|INT>; YES = jira-release-notes-<us|int>
     US: NONE             #   US  -> "Release Notes - Sprint <n>"
     INT: YES             #   INT -> "Evolus International - <rel>"   (both YES = two documents)
 
 ai:
   model: gpt-5.4         # OpenAI model (OPENAI_API_KEY in .env)
 
-confluence:
-  space_key: "~629b28ed2eafc9006eee7310"   # "" = do not publish
-  parent_id: "327681"                      # page or folder the release notes go under
+confluence:        # where each region's release notes go (GoCD env vars
+                   #   CONFLUENCE_SPACE_KEY_<US|INT>, CONFLUENCE_PARENT_PAGE_ID_<US|INT>)
+  US:
+    space_key: "~629b28ed2eafc9006eee7310"   # "" = do not publish US
+    parent_id: "327681"                      # page or folder the US notes go under
+  INT:
+    space_key: "~629b28ed2eafc9006eee7310"   # "" = do not publish INT
+    parent_id: "327681"                      # page or folder the INT notes go under
 
 auth:
   enabled: true                  # GoCD login (password-file plugin)
