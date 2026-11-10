@@ -206,12 +206,12 @@ def cmd_combine(settings: Settings) -> None:
     print(f"[combine] regions switched on: {', '.join(regions)}")
     written = 0
     for region in regions:
-        keys = region_spaces(region, [s["workspace"] for s in spaces])   # RELEASE_SPACES_<R>
+        keys = region_spaces(region, [s["workspace"] for s in spaces])   # INT: RELEASE_SPACES_INT, US: the rest
         mine = [s for s in spaces if s["workspace"] in keys and s["issues"]]
         if not mine:
             (out / region).mkdir(exist_ok=True)
             _status_page(out / region, f"{region}: no tickets on this release in its spaces "
-                                       f"(RELEASE_SPACES_{region}) - nothing to write.")
+                                       f"({'RELEASE_SPACES_INT' if region == 'INT' else 'all except RELEASE_SPACES_INT'}) - nothing to write.")
             continue
         _combine_region(settings, region, mine, out / region)
         written += 1

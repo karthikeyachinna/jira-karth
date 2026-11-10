@@ -103,7 +103,8 @@ def main() -> None:
         stale = [v["name"] for v in current.json().get("environment_variables", [])
                  if v["name"] in values or v["name"] in ("JIRA_WORKSPACES", "RELEASE_REGION",
                                                      "CONFLUENCE_SPACE_KEY",
-                                                     "CONFLUENCE_PARENT_PAGE_ID")
+                                                     "CONFLUENCE_PARENT_PAGE_ID",
+                                                     "RELEASE_SPACES_US")
                  or v["name"].startswith((deploy.SPACE_PREFIX, deploy.REGION_PREFIX))]
         if stale:
             api("PATCH", env_path, 3, json={"environment_variables": {"add": [], "remove": stale}})

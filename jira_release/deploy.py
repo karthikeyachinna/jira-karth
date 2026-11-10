@@ -21,15 +21,12 @@ def is_on(value) -> bool:
     return value is True or str(value).strip().upper() in ON
 
 
-def region_space_lists() -> dict[str, list[str]]:
-    """release.spaces as {US|INT: [space keys]}; [] = every space not listed for another region."""
-    spaces = get("release.spaces", {}) or {}
-    out = {}
-    for r in REGIONS:
-        v = spaces.get(r, spaces.get(r.lower())) or []
-        v = v.split(",") if isinstance(v, str) else v
-        out[r] = [str(k).strip().upper() for k in v if str(k).strip()]
-    return out
+def int_spaces() -> list[str]:
+    """release.int_spaces: the Jira spaces the International (INT) notes are built from.
+    US needs no list: it is every other space."""
+    v = get("release.int_spaces", []) or []
+    v = v.split(",") if isinstance(v, str) else v
+    return [str(k).strip().upper() for k in v if str(k).strip()]
 
 
 def region_switches() -> dict[str, str]:
@@ -92,13 +89,12 @@ def job_env() -> dict[str, str]:
     values.update({SPACE_PREFIX + k: v for k, v in space_switches().items()})
     values.update({REGION_PREFIX + k: v for k, v in region_switches().items()})
     for r in REGIONS:
-        values[f"RELEASE_SPACES_{r}"] = ",".join(region_space_lists()[r])
         values[f"CONFLUENCE_SPACE_KEY_{r}"] = get(f"confluence.{r}.space_key",
                                                   get("confluence.space_key", ""))
         values[f"CONFLUENCE_PARENT_PAGE_ID_{r}"] = str(get(f"confluence.{r}.parent_id",
                                                            get("confluence.parent_id", "")))
-    return {k: str(v) for k, v in values.items()
-            if v not in (None, "") or k.startswith("RELEASE_SPACES_")}
+    values["RELEASE_SPACES_INT"] = ",".join(int_spaces())
+    return {k: str(v) for k, v in values.items() if v not in (None, "")}
 
 
 # names used across the scripts
